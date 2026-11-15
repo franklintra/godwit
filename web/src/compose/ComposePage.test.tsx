@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
 import { ComposePage } from "./ComposePage";
@@ -97,6 +97,7 @@ const state = {
   updatedAt: new Date(2026, 9, 10, 9, 5).getTime(),
   theme,
   locale: "zh-Hans",
+  fromProgram: false,
   wit: { enabled: false, translateOnly: false, skills: [], languages: [], chips: [], model: "" },
 };
 const noWarnings = { sent: false, conflict: false, warnings: [], digest: "", blocked: null };
@@ -127,6 +128,24 @@ test("loads the draft", async () => {
   await userEvent.click(screen.getByRole("button", { name: "显示引用的原邮件（助手只读）" }));
   expect(screen.getByText("> 原文")).toBeInTheDocument();
   expect(currentWindow.setTitle).toHaveBeenLastCalledWith("你好");
+});
+
+test("a program's draft asks for a check before sending (ADR 0043)", async () => {
+  vi.mocked(api.load).mockResolvedValue({ ...state, fromProgram: true });
+  render(<ComposePage />);
+  await body();
+  expect(screen.getByText("来自程序的草稿")).toBeInTheDocument();
+  expect(
+    screen.getByText(
+      "这封草稿由程序（AI 工具、脚本、插件或 Wit）写入或修改过。发送前请核对收件人和内容。",
+    ),
+  ).toBeInTheDocument();
+});
+
+test("the user's own draft has no program notice", async () => {
+  render(<ComposePage />);
+  await body();
+  expect(screen.queryByText("来自程序的草稿")).not.toBeInTheDocument();
 });
 
 test("the editor is a card on the window's material, under a borderless title bar", async () => {
@@ -293,6 +312,7 @@ describe("autosave", () => {
   // Base UI shares one rAF scheduler across tests: a frame left queued on the fake clock would
   // block every later menu from opening, so run it before restoring real timers.
   afterEach(() => {
+    cleanup(); // a dialog left open (the conflict's) closes on this clock, not the real one
     act(() => vi.runOnlyPendingTimers());
     vi.useRealTimers();
   });
@@ -304,7 +324,7 @@ describe("autosave", () => {
     render(<ComposePage />);
     await u.type(await body(), "!");
     await act(() => vi.advanceTimersByTimeAsync(1000));
-    expect(screen.getByRole("alert")).toHaveTextContent("草稿在别处被修改");
+    expect(screen.getByRole("alertdialog")).toHaveTextContent("草稿在别处被修改");
   });
 
   test("first save carries the loaded revision, later ones the previous result's", async () => {
@@ -542,6 +562,21 @@ test("send later: warnings keep the time for send anyway", async () => {
   expect(api.send).toHaveBeenLastCalledWith(7, "d", at);
 });
 
+test("send now from the menu after a warned send later sends now, not at its time", async () => {
+  const w = { plugin: "p", message: "没有附件" };
+  vi.mocked(api.send).mockResolvedValueOnce({ ...noWarnings, warnings: [w], digest: "d" });
+  render(<ComposePage />);
+  await body();
+  vi.mocked(api.popupMenu).mockImplementationOnce(async (items) =>
+    items.findIndex((l) => l.startsWith("明天")),
+  );
+  await userEvent.click(screen.getByRole("button", { name: "发送选项" }));
+  expect(screen.getByRole("button", { name: "仍然发送" })).toBeInTheDocument();
+  vi.mocked(api.popupMenu).mockImplementationOnce(async () => 0); // 立即发送
+  await userEvent.click(screen.getByRole("button", { name: "发送选项" }));
+  expect(api.send).toHaveBeenLastCalledWith(7, "", 0);
+});
+
 test("send later…: ⌘↩ in the dialog schedules, it does not send now", async () => {
   vi.mocked(api.popupMenu).mockImplementationOnce(async (items) => items.length - 1);
   render(<ComposePage />);
@@ -614,10 +649,14 @@ test("an account switch that conflicts reverts the pill", async () => {
   await body();
   await pickAccount("work@x.com");
   await waitFor(() => expect(api.setAccount).toHaveBeenCalled());
+  // behind the conflict's dialog, which hides the page from the a11y tree
   await waitFor(() =>
-    expect(screen.getByRole("button", { name: "发件账户" })).toHaveTextContent("me@x.com"),
+    expect(screen.getByRole("button", { name: "发件账户", hidden: true })).toHaveTextContent(
+      "me@x.com",
+    ),
   );
   expect(screen.getByText("-- me")).toBeInTheDocument();
+  expect(screen.getByRole("alertdialog")).toHaveTextContent("草稿在别处被修改");
 });
 
 test("attachments: add reports oversize, × removes", async () => {
@@ -772,12 +811,13 @@ test("conflict resolution runs once at a time, frozen, and use-latest drops pend
   let give!: (s: ComposeStateT) => void;
   vi.mocked(api.latest).mockImplementation(() => new Promise((r) => (give = r)));
   const el = await conflictBySend();
-  fireEvent.change(screen.getByRole("combobox", { name: "收件人" }), {
+  // input that reached the page behind the conflict's dialog (hidden from the a11y tree, not gone)
+  fireEvent.change(screen.getByRole("combobox", { name: "收件人", hidden: true }), {
     target: { value: "p@q.r" },
   });
   fireEvent.click(screen.getByRole("button", { name: "使用最新版本" }));
   expect(el).toHaveAttribute("readonly");
-  expect(screen.getByRole("textbox", { name: "主题" })).toHaveAttribute("readonly");
+  expect(screen.getByRole("textbox", { name: "主题", hidden: true })).toHaveAttribute("readonly");
   fireEvent.click(screen.getByRole("button", { name: "保留我的版本" }));
   fireEvent.click(screen.getByRole("button", { name: "使用最新版本" }));
   expect(api.latest).toHaveBeenCalledTimes(1);

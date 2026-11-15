@@ -22,7 +22,9 @@ export function presets(now: Date): { key: string; at: Date }[] {
 export function SendBar({
   sending,
   frozen,
+  anyway = false,
   onSend,
+  onSendNow = onSend,
   onSendLater,
   menu,
   t,
@@ -30,7 +32,11 @@ export function SendBar({
   sending: boolean;
   /** True while any operation runs: the buttons are inert. */
   frozen: boolean;
+  /** Plugins warned about this send: the button reads 仍然发送, and onSend goes ahead despite them. */
+  anyway?: boolean;
   onSend(): void;
+  /** The menu's Send now: now, whatever onSend's warned send was for (onSend if absent). */
+  onSendNow?(): void;
   /** Sends at at, unix milliseconds. */
   onSendLater(at: number): void;
   /** Shows items ("" a separator) as a native menu at x, y of the page: the index chosen, -1 none. */
@@ -55,7 +61,7 @@ export function SendBar({
       Math.round(r.left),
       Math.round(r.bottom),
     );
-    if (i === 0) onSend();
+    if (i === 0) onSendNow();
     else if (i === items.length) openDialog();
     else if (i >= 2 && i < 2 + ps.length) onSendLater(ps[i - 2].at.getTime());
   };
@@ -63,7 +69,7 @@ export function SendBar({
   return (
     <ButtonGroup className="ml-auto">
       <Button disabled={off} onClick={onSend}>
-        {t("compose.send")}
+        {t(anyway ? "compose.send_anyway" : "compose.send")}
       </Button>
       <Button
         className="w-6"

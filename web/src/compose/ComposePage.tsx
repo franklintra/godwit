@@ -4,6 +4,7 @@ import { currentWindow } from "mygo-runtime";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useDefaultLayout } from "react-resizable-panels";
 import { toast } from "sonner";
+import { toneButton } from "@/components/tone";
 import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
@@ -297,6 +298,7 @@ function Compose({
   const [initial, setInitial] = useState({ body: state.body, n: 0 }); // n remounts the editor
   const [fieldsKey, setFieldsKey] = useState(0); // remounts the fields
   const [from, setFrom] = useState(state.from);
+  const [fromProgram, setFromProgram] = useState(state.fromProgram); // ADR 0043: check before sending
   const [signature, setSignature] = useState(sigOf(state));
   const [quote, setQuote] = useState(state.quote);
   const [showQuote, setShowQuote] = useState(false);
@@ -438,6 +440,7 @@ function Compose({
       if (s.status === "conflict" || s.dirty || l.revision <= s.revision) return;
       if (edits.current !== runEdits.current) return;
       adopt(l.revision, l.body, l.subject);
+      setFromProgram(l.fromProgram);
       setApplied(true);
     } catch (e) {
       if (n === reloads.current) setReloadErr(witError(message(e), t));
@@ -576,6 +579,8 @@ function Compose({
     setBlocked(null);
   };
   const failure = (e: unknown) => toast.error(errorText(e, t));
+  // Plugins warned and none blocked: Send reads 仍然发送 and goes ahead despite the warnings.
+  const warned = warnings.list.length > 0 && !blocked;
 
   /** Sends now, or at at (unix ms) for Send later; digest goes ahead despite its warnings. */
   const send = async (digest = "", at = 0) => {
@@ -635,6 +640,7 @@ function Compose({
       const r = await sv.run(op);
       if (r && !r.conflict) {
         adopt(r.revision, r.body, r.subject);
+        setFromProgram(r.fromProgram);
         setSignature(sigOf(r));
         setAttachments(r.attachments);
         setSavedAt(fmt(new Date(r.updatedAt)));
@@ -754,6 +760,7 @@ function Compose({
       if (saver.current !== sv) return;
       setLatestFailed(false);
       setFrom(l.from);
+      setFromProgram(l.fromProgram);
       setSignature(sigOf(l));
       setQuote(l.quote);
       setAttachments(l.attachments);
@@ -868,6 +875,13 @@ function Compose({
         <ResizablePanel id="editor" minSize={320}>
           <section className="flex h-full min-w-0 flex-col overflow-hidden rounded-xl border-[0.5px] bg-background shadow-(--shadow-xs)">
             <div className="flex min-h-0 flex-1 flex-col overflow-auto">
+              {fromProgram && (
+                // A strip across the card's top, as the Wit banner below, its text in line with the fields; blue, as the native notice (kit.ToneInfo).
+                <div className="flex flex-wrap gap-x-2 border-b-[0.5px] border-blue-200 bg-blue-50 px-4 py-2 text-sm text-blue-700 dark:border-blue-900 dark:bg-blue-950/50 dark:text-blue-300">
+                  <span className="font-medium">{t("mail.draft.from_program")}</span>
+                  <span>{t("mail.draft.from_program_help")}</span>
+                </div>
+              )}
               <Fields
                 key={fieldsKey}
                 ref={fieldsRef}
@@ -893,7 +907,7 @@ function Compose({
                   >
                     <AlertDescription>{reloadErr}</AlertDescription>
                     <AlertAction>
-                      <Button variant="ghost" size="sm" onClick={() => void reload()}>
+                      <Button className={toneButton.danger} size="sm" onClick={() => void reload()}>
                         {t("common.retry")}
                       </Button>
                     </AlertAction>
@@ -994,7 +1008,6 @@ function Compose({
                   conflict={sv?.status === "conflict"}
                   latestFailed={latestFailed}
                   frozen={locked}
-                  onSendAnyway={() => send(warnings.digest, warnings.at)}
                   onKeepMine={() => resolve(true)}
                   onUseLatest={() => resolve(false)}
                   onRetry={() => retry.current()}
@@ -1010,7 +1023,9 @@ function Compose({
               <SendBar
                 sending={sending}
                 frozen={locked}
-                onSend={() => send()}
+                anyway={warned}
+                onSend={() => (warned ? send(warnings.digest, warnings.at) : send())}
+                onSendNow={() => send()}
                 onSendLater={(at) => send("", at)}
                 menu={api.popupMenu}
                 t={t}
