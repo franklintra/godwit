@@ -41,6 +41,9 @@ type Draft struct {
 	// created or changed it, so the interface labels it and offers
 	// ApproveDraft. Local only; the user's own edits keep it (ADR 0043).
 	FromProgram bool
+	// ScheduledFor is the original send time of a scheduled message taken back
+	// from the outbox, or zero if none. SaveDraft ignores this field.
+	ScheduledFor time.Time
 }
 
 // DraftAttachment is a file copied into the draft's directory.
@@ -416,7 +419,7 @@ func (s *Service) DraftForApproval(ctx context.Context, approvalID int64) (int64
 // read, covering rows stored before SaveDraft sanitized.
 func (s *Service) GetDraft(ctx context.Context, id int64) (Draft, error) {
 	rows, err := s.db.Query(ctx, `SELECT account_id, mode, source_message_id, to_addrs, cc_addrs, bcc_addrs, reply_to,
-		subject, body_html, updated_at, revision, from_program FROM drafts WHERE id = ?`, id)
+		subject, body_html, updated_at, revision, from_program, scheduled_for FROM drafts WHERE id = ?`, id)
 	if err != nil {
 		return Draft{}, err
 	}
@@ -427,7 +430,7 @@ func (s *Service) GetDraft(ctx context.Context, id int64) (Draft, error) {
 	d := Draft{ID: id, AccountID: store.Int(r[0]), Mode: store.Str(r[1]), SourceMessageID: store.Int(r[2]),
 		To: jsonList(store.Str(r[3])), Cc: jsonList(store.Str(r[4])), Bcc: jsonList(store.Str(r[5])),
 		ReplyTo: store.Str(r[6]), Subject: store.Str(r[7]), UpdatedAt: time.Unix(store.Int(r[9]), 0), Revision: store.Int(r[10]),
-		FromProgram: store.Int(r[11]) != 0}
+		FromProgram: store.Int(r[11]) != 0, ScheduledFor: unixMilli(r[12])}
 	if d.HTML, err = s.sanitizeDraft(ctx, store.Str(r[8])); err != nil {
 		return Draft{}, err
 	}
@@ -845,10 +848,12 @@ func (s *Service) enqueue(ctx context.Context, draftID, rev int64, checked []str
 			SELECT thread_id, last_insert_rowid(), max(?, COALESCE(date, 0)) FROM messages WHERE id = ? AND thread_id IS NOT NULL`,
 			Args: []any{s.clk().Now().Unix(), d.SourceMessageID}}}, stmts...)
 	}
-	if _, err := s.db.DurableTransaction(ctx, append([]sqlite.Statement{{SQL: `INSERT INTO outbox(account_id, message_id_hdr, raw_path, rcpts, state, subject, created_at,
+	if _, err := s.db.DurableTransaction(ctx, append([]sqlite.Statement{
+		{SQL: "UPDATE drafts SET scheduled_for = NULL WHERE id = ? AND scheduled_for IS NOT NULL", Args: []any{draftID}},
+		{SQL: `INSERT INTO outbox(account_id, message_id_hdr, raw_path, rcpts, state, subject, created_at,
 		draft_id, send_after, send_at) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
-		Args: []any{d.AccountID, messageID, rawPath, encodeList(rcpts), d.Subject, now.Unix(), draftID,
-			sendAfter.UnixMilli(), sendAt}}}, stmts...)); err != nil {
+			Args: []any{d.AccountID, messageID, rawPath, encodeList(rcpts), d.Subject, now.Unix(), draftID,
+				sendAfter.UnixMilli(), sendAt}}}, stmts...)); err != nil {
 		os.Remove(rawPath)
 		return err
 	}
