@@ -47,6 +47,7 @@ CompleteContacts
 ContactDetail
 ContactMail
 Contacts
+CountAppAndWitDeadlines
 CreateLabel
 CreateLocalFolder
 CreateSignature
@@ -217,6 +218,7 @@ SetRoleFolder
 SetRuleEnabled
 SetSettings
 SetSkillEnabled
+SetThreadDeadline
 SetViewException
 SignatureCode
 SignatureEditor

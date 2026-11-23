@@ -51,6 +51,7 @@ type mailItem struct {
 	NewReply    bool
 	WaitingDays int
 	Manual      bool
+	Deadline    *core.Deadline
 }
 
 func threadItem(t core.ThreadSummary) mailItem {
@@ -175,6 +176,14 @@ func (l *listSel) reset() { *l = listSel{list: &ui.ListState{}, cur: -1} }
 
 // key is the row's identity in the list and its choice: thread and message
 // IDs are separate sequences.
+// threadID is the conversation of the row.
+func (it mailItem) threadID() int64 {
+	if it.Thread {
+		return it.ID
+	}
+	return it.Msg.ThreadID
+}
+
 func (it mailItem) key() string {
 	if it.Thread {
 		return "t:" + strconv.FormatInt(it.ID, 10)
@@ -996,7 +1005,8 @@ func (p *mailPage) listView(c *ui.Context) {
 			return
 		}
 		it := rows[es[i].row]
-		p.item(c, it).ContextMenu(func(m *ui.Menu) {
+		row := p.item(c, it)
+		row.ContextMenu(func(m *ui.Menu) {
 			on := []mailItem{it}
 			if ls.sel.Has(it.key()) {
 				on = p.chosen(rows)
@@ -1021,6 +1031,14 @@ func (p *mailPage) listView(c *ui.Context) {
 				why := p.cannot(on, k)
 				if m.Item(i18n.T("mail.action." + k)).Icon(menuIcon(mailActionIcons[k])).Disabled(why != "").Subtitle(why).Chosen() {
 					act, target = k, on
+				}
+			}
+			if len(on) == 1 && on[0].threadID() != 0 {
+				if m.Item(i18n.T("mail.menu.set_deadline")).Icon(menuIcon("calendar")).Chosen() {
+					p.a.pickReplyDate(on[0].threadID(), on[0].Deadline)
+				}
+				if on[0].Deadline != nil && m.Item(i18n.T("mail.menu.remove_deadline")).Icon(menuIcon("calendar-close")).Chosen() {
+					p.a.setReplyDate(on[0].threadID(), core.Deadline{})
 				}
 			}
 			m.Separator()
@@ -1601,10 +1619,24 @@ func (p *mailPage) row(c *ui.Context, it mailItem, toggleStar func()) ui.Element
 			} else {
 				ui.Text(c, subject).TextColor(ink).SingleLine()
 			}
-			if icon, line := p.viewLine(it); line != "" {
+			icon, line, due, overdue := rowStatus(p.a.clock.Now(), it)
+			if line != "" || due != "" {
 				ui.Row(c).Gap(th.Space(1)).AlignItems(ui.Center).TextColor(t.Muted).Children(func() {
-					ui.Icon(c, icons.Get(icon)).Size(theme.IconXs, theme.IconXs).Shrink(0)
-					kit.Text(c, line, t.Text.Xs).SingleLine()
+					if icon != "" {
+						ui.Icon(c, icons.Get(icon)).Size(theme.IconXs, theme.IconXs).Shrink(0)
+					}
+					if line != "" {
+						kit.Text(c, line, t.Text.Xs).SingleLine().Shrink(1)
+					}
+					if due != "" {
+						if line != "" {
+							kit.Text(c, "·", t.Text.Xs).Shrink(0)
+						}
+						date := kit.Text(c, due, t.Text.Xs).SingleLine().Shrink(0)
+						if overdue {
+							date.TextColor(t.DangerText)
+						}
+					}
 				})
 			} else if it.Snippet != "" {
 				kit.Text(c, it.Snippet, t.Text.Xs).TextColor(t.Muted).SingleLine()

@@ -6,7 +6,9 @@ CachedAttachments
 CachedImage
 CachedImageDims
 CancelTrayQuit
+ConfirmSummaryService
 ContactAvatar
+CountUnrepliedToSummarize
 DevPreviewSignInCode
 DownloadRecognitionModelStream
 ExportAccountsFile
@@ -23,6 +25,7 @@ PrepareModelStream
 PreviewAccountImportFile
 RawMessageFile
 RecentLog
+RemoveAppAndWitDeadlines
 ReplaceUIBackend
 SendLater
 SenderAvatar
@@ -33,5 +36,10 @@ SetUIForeground
 SetUIReady
 StopUIBackend
 StoreLatestVersion
+SummarizeUnreplied
+SummaryArrivalState
 SystemTranslatorLanguages
+ThreadDeadline
 TrayShown
+UndoRemoveAppAndWitDeadlines
+UndoSetThreadDeadline
