@@ -324,13 +324,21 @@ type outboxRow struct {
 // being sent. Network failures are recorded on the items; database errors are
 // returned, and so is a refused login, which stops the round and pauses the
 // account's outbox (smtp_reauth).
-func (s *Service) processOutbox(ctx context.Context, recv backend.Receiver, accountID int64) error {
+//
+// recheck also takes the items an earlier round left uncertain (#894): a
+// round checks them last, after its fetch, since a server that drops the
+// connection on that check each time would otherwise fail every round.
+func (s *Service) processOutbox(ctx context.Context, recv backend.Receiver, accountID int64, recheck bool) error {
 	start := s.clk().Now().UnixMilli()
 	defer s.wakeForOutbox(ctx, accountID, start)
+	states := "'sent'"
+	if recheck {
+		states = "'sent', 'send_uncertain', 'archive_uncertain'"
+	}
 	// A queued item waits for its undo window and its retry time.
 	rows, err := s.db.Query(ctx, `SELECT id, message_id_hdr, raw_path, rcpts, state, draft_id, attempts,
 		COALESCE(send_after, created_at * 1000) FROM outbox
-		WHERE account_id = ? AND (state IN ('sent', 'send_uncertain', 'archive_uncertain')
+		WHERE account_id = ? AND (state IN (`+states+`)
 		OR state = 'queued' AND IFNULL(send_after, 0) <= ? AND IFNULL(next_attempt_at, 0) <= ?) ORDER BY id`, accountID, start, start)
 	if err != nil || len(rows.Values) == 0 {
 		return err

@@ -893,14 +893,8 @@ func (s *Service) syncAccount(ctx context.Context, accountID int64, explicit boo
 	// The outbox before the push: a bulk change (thousands of ops) or a failing
 	// op must not hold mail the user sent.
 	useSMTP, smtpErr := s.checkSMTP(ctx, accountID, explicit)
-	// Before a sync stored the folders, where the Sent folder is is not known:
-	// the outbox runs once more after the fetch to file what it sent.
-	_, folders, err := mailsync.SentFolder(ctx, s.db, accountID)
-	if err != nil {
-		return err
-	}
 	if useSMTP {
-		smtpErr = s.processOutbox(ctx, recv, accountID)
+		smtpErr = s.processOutbox(ctx, recv, accountID, false)
 		if smtpErr != nil && !errors.Is(smtpErr, backend.ErrAuthFailed) {
 			return smtpErr
 		}
@@ -949,8 +943,10 @@ func (s *Service) syncAccount(ctx context.Context, accountID int64, explicit boo
 	if err := s.pushOps(ctx, recv, accountID, mailsync.PushNewOps); err != nil {
 		return err
 	}
-	if useSMTP && smtpErr == nil && !folders {
-		smtpErr = s.processOutbox(ctx, recv, accountID)
+	// Last, the outbox again: it files what it sent when the Sent folder was not
+	// known before the fetch, and checks the items earlier rounds left uncertain.
+	if useSMTP && smtpErr == nil {
+		smtpErr = s.processOutbox(ctx, recv, accountID, true)
 	}
 	return smtpErr
 }

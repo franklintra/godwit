@@ -901,3 +901,22 @@ func TestOutboxItemTo(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"lei@example.com", "bob@example.com", "dave@example.com"}, out[0].To)
 }
+
+// A server that hangs up on every sent-copy upload (#894) costs the round the
+// item was sent in, not every round after: later rounds sync first and retry
+// the upload last, so new mail still arrives while the item waits.
+func TestArchiveUncertainDoesNotBlockSync(t *testing.T) {
+	e := newSendEnv(t, false)
+	e.sync(t)
+	e.sendNew(t)
+	e.im.DropEveryAppend()
+	_ = e.s.SyncNow(bg, e.acc.ID) // the connection dies on the upload
+	require.Equal(t, "archive_uncertain", e.state(t))
+	e.put(t, "INBOX", eml("m2@x", "bob@example.com", "alice@example.com", "later", "Mon, 05 Oct 2026 10:00:00 +0000", "2"))
+	for range 2 {
+		require.NoError(t, e.s.SyncNow(bg, e.acc.ID), "a pending sent copy must not fail the sync")
+	}
+	assert.Equal(t, 1, int(e.count(t, "SELECT count(*) FROM messages WHERE message_id = 'm2@x'")))
+	assert.Equal(t, "archive_uncertain", e.state(t), "still waiting for its copy in Sent")
+	assert.Len(t, e.smtp.Messages(), 1)
+}
