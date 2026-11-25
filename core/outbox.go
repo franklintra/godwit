@@ -325,20 +325,15 @@ type outboxRow struct {
 // returned, and so is a refused login, which stops the round and pauses the
 // account's outbox (smtp_reauth).
 //
-// recheck also takes the items an earlier round left uncertain (#894): a
-// round checks them last, after its fetch, since a server that drops the
-// connection on that check each time would otherwise fail every round.
-func (s *Service) processOutbox(ctx context.Context, recv backend.Receiver, accountID int64, recheck bool) error {
+// Items already uncertain, or waiting for folder discovery, go into later.
+// Retrying them last keeps a dropped IMAP connection from blocking the fetch.
+func (s *Service) processOutbox(ctx context.Context, recv backend.Receiver, accountID int64, later *[]outboxRow) error {
 	start := s.clk().Now().UnixMilli()
 	defer s.wakeForOutbox(ctx, accountID, start)
-	states := "'sent'"
-	if recheck {
-		states = "'sent', 'send_uncertain', 'archive_uncertain'"
-	}
 	// A queued item waits for its undo window and its retry time.
 	rows, err := s.db.Query(ctx, `SELECT id, message_id_hdr, raw_path, rcpts, state, draft_id, attempts,
 		COALESCE(send_after, created_at * 1000) FROM outbox
-		WHERE account_id = ? AND (state IN (`+states+`)
+		WHERE account_id = ? AND (state IN ('sent', 'send_uncertain', 'archive_uncertain')
 		OR state = 'queued' AND IFNULL(send_after, 0) <= ? AND IFNULL(next_attempt_at, 0) <= ?) ORDER BY id`, accountID, start, start)
 	if err != nil || len(rows.Values) == 0 {
 		return err
@@ -372,6 +367,10 @@ func (s *Service) processOutbox(ctx context.Context, recv backend.Receiver, acco
 		o := outboxRow{id: store.Int(r[0]), messageID: store.Str(r[1]), rawPath: store.Str(r[2]),
 			rcpts: jsonList(store.Str(r[3])), state: store.Str(r[4]), draftID: r[5], attempts: int(store.Int(r[6])),
 			queuedAt: store.Int(r[7])}
+		if o.state == "send_uncertain" || o.state == "archive_uncertain" {
+			*later = append(*later, o)
+			continue
+		}
 		if beforeOutboxItem != nil {
 			beforeOutboxItem(o.id)
 		}
@@ -411,20 +410,45 @@ func (s *Service) processOutbox(ctx context.Context, recv backend.Receiver, acco
 			}
 			o.state = "sent"
 			fallthrough
-		case "sent", "archive_uncertain":
+		case "sent":
 			saves := false
 			if snd != nil {
 				saves = snd.SavesSent()
-			} else if o.state == "sent" && acc.Sending.Protocol != auth.JMAP {
+			} else if acc.Sending.Protocol != auth.JMAP {
 				saves = sa.sender().SavesSent()
 			}
 			if !known && !saves {
+				*later = append(*later, o)
 				continue
 			}
 			if err := s.archiveItem(ctx, wctx, recv, saves, sent, keep, o); err != nil {
 				return err
 			}
-		case "send_uncertain":
+		}
+	}
+	return ctx.Err()
+}
+
+// recheckOutbox handles the receiving side only, using the current Sent folder.
+func (s *Service) recheckOutbox(ctx context.Context, recv backend.Receiver, accountID int64, items []outboxRow) error {
+	sent, known, err := mailsync.SentFolder(ctx, s.db, accountID)
+	if err != nil || !known {
+		return err
+	}
+	keep, err := s.localSent(ctx, accountID)
+	if err != nil {
+		return err
+	}
+	defer s.bus.Publish(events.Event{Type: events.OutboxChanged, AccountID: accountID})
+	wctx := context.WithoutCancel(ctx)
+	for _, o := range items {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if beforeOutboxItem != nil {
+			beforeOutboxItem(o.id)
+		}
+		if o.state == "send_uncertain" {
 			if sent == "" {
 				continue // cannot check; the user decides
 			}
@@ -437,9 +461,11 @@ func (s *Service) processOutbox(ctx context.Context, recv backend.Receiver, acco
 			if err != nil {
 				return err
 			}
+		} else if err := s.archiveItem(ctx, wctx, recv, false, sent, keep, o); err != nil {
+			return err
 		}
 	}
-	return nil
+	return ctx.Err()
 }
 
 // wakeForOutbox has the account's worker sync again when the next queued item

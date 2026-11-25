@@ -914,9 +914,62 @@ func TestArchiveUncertainDoesNotBlockSync(t *testing.T) {
 	require.Equal(t, "archive_uncertain", e.state(t))
 	e.put(t, "INBOX", eml("m2@x", "bob@example.com", "alice@example.com", "later", "Mon, 05 Oct 2026 10:00:00 +0000", "2"))
 	for range 2 {
+		before := e.im.Appends()
 		require.NoError(t, e.s.SyncNow(bg, e.acc.ID), "a pending sent copy must not fail the sync")
+		require.Equal(t, before+1, e.im.Appends(), "retry the sent copy once per round")
 	}
 	assert.Equal(t, 1, int(e.count(t, "SELECT count(*) FROM messages WHERE message_id = 'm2@x'")))
 	assert.Equal(t, "archive_uncertain", e.state(t), "still waiting for its copy in Sent")
+	assert.Len(t, e.smtp.Messages(), 1)
+}
+
+func TestOutboxWorkIsSelectedOncePerRound(t *testing.T) {
+	e := newSendEnv(t, false)
+	e.sync(t)
+	e.sendNew(t)
+	e.sendNew(t)
+	_, err := e.s.db.Execute(bg, `UPDATE outbox SET send_after = ? WHERE id = (SELECT MAX(id) FROM outbox)`, e.clock.Now().Add(time.Minute).UnixMilli())
+	require.NoError(t, err)
+	e.smtp.FailAfterData(1)
+	var visits int
+	setFor(t, &beforeOutboxItem, func(int64) {
+		visits++
+		e.clock.Advance(time.Minute)
+	})
+	e.sync(t)
+	require.Equal(t, 1, visits, "neither the newly uncertain item nor the newly due item belongs in recovery")
+	require.Len(t, e.smtp.Messages(), 1)
+	e.sync(t)
+	require.Len(t, e.smtp.Messages(), 2)
+	assert.Equal(t, "done", e.state(t))
+}
+
+func TestOutboxRecheckAfterFailedFetch(t *testing.T) {
+	e := newSendEnv(t, false)
+	e.sync(t)
+	e.sendNew(t)
+	e.im.DropAfterNextAppend()
+	_ = e.s.SyncNow(bg, e.acc.ID)
+	require.Equal(t, "archive_uncertain", e.state(t))
+	_, err := e.s.db.Execute(bg, `CREATE TRIGGER stop_fetch BEFORE INSERT ON messages BEGIN SELECT RAISE(ABORT, 'fetch blocked'); END`)
+	require.NoError(t, err)
+	e.put(t, "INBOX", eml("later@x", "bob@example.com", "alice@example.com", "later", day, "later"))
+	require.ErrorContains(t, e.s.SyncNow(bg, e.acc.ID), "fetch blocked")
+	assert.Equal(t, "done", e.state(t), "the server already stored the sent copy")
+	assert.Len(t, e.smtp.Messages(), 1)
+}
+
+func TestCancelledOutboxRecheck(t *testing.T) {
+	e := newSendEnv(t, false)
+	e.sync(t)
+	e.sendNew(t)
+	e.smtp.FailAfterData(1)
+	e.sync(t)
+	require.Equal(t, "send_uncertain", e.state(t))
+	ctx, cancel := context.WithCancel(bg)
+	defer cancel()
+	setFor(t, &beforeOutboxItem, func(int64) { cancel() })
+	require.ErrorIs(t, e.s.SyncNow(ctx, e.acc.ID), context.Canceled)
+	assert.Equal(t, "send_uncertain", e.state(t))
 	assert.Len(t, e.smtp.Messages(), 1)
 }

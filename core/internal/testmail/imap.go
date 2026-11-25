@@ -79,6 +79,7 @@ type IMAP struct {
 	cmds              atomic.Int64 // MOVE and COPY commands handled
 	dropAppend        atomic.Bool
 	dropAppends       atomic.Bool
+	appends           atomic.Int64
 	dropBeforeCopy    atomic.Bool
 	dropCopy          atomic.Bool
 	dropExpunge       atomic.Bool
@@ -115,6 +116,9 @@ func (s *IMAP) DropAfterNextAppend() { s.dropAppend.Store(true) }
 // connection before storing anything, as a server that hangs up on a
 // sent-copy upload each time.
 func (s *IMAP) DropEveryAppend() { s.dropAppends.Store(true) }
+
+// Appends counts client APPEND attempts, including ones dropped before storage.
+func (s *IMAP) Appends() int64 { return s.appends.Load() }
 
 // DropBeforeNextCopy makes the next COPY close the client's connection before
 // copying anything.
@@ -345,6 +349,7 @@ func (s session) Copy(set imap.NumSet, dest string) (*imap.CopyData, error) {
 
 // Append drops the APPENDUID data when UIDPLUS is disabled.
 func (s session) Append(mb string, r imap.LiteralReader, o *imap.AppendOptions) (*imap.AppendData, error) {
+	s.s.appends.Add(1)
 	if s.s.dropAppends.Load() {
 		s.conn.Conn.Close()
 		return nil, errors.New("dropped before append")

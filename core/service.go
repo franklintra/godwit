@@ -894,9 +894,23 @@ func (s *Service) syncAccount(ctx context.Context, accountID int64, explicit boo
 	// op must not hold mail the user sent.
 	useSMTP, smtpErr := s.checkSMTP(ctx, accountID, explicit)
 	if useSMTP {
-		smtpErr = s.processOutbox(ctx, recv, accountID, false)
+		var later []outboxRow
+		smtpErr = s.processOutbox(ctx, recv, accountID, &later)
 		if smtpErr != nil && !errors.Is(smtpErr, backend.ErrAuthFailed) {
 			return smtpErr
+		}
+		if smtpErr == nil && len(later) > 0 {
+			// An unrelated push or fetch failure must not starve Sent recovery.
+			// Check last: an upload can close the connection on every attempt.
+			defer func() {
+				recheckErr := ctx.Err()
+				if recheckErr == nil {
+					recheckErr = s.recheckOutbox(ctx, recv, accountID, later)
+				}
+				if recheckErr != nil {
+					err = errors.Join(err, recheckErr)
+				}
+			}()
 		}
 	}
 	if err := s.pushOps(ctx, recv, accountID, mailsync.PushOps); err != nil {
@@ -942,11 +956,6 @@ func (s *Service) syncAccount(ctx context.Context, accountID int64, explicit boo
 	// Ops that waited for a move's claim can go now; ones already tried are not retried.
 	if err := s.pushOps(ctx, recv, accountID, mailsync.PushNewOps); err != nil {
 		return err
-	}
-	// Last, the outbox again: it files what it sent when the Sent folder was not
-	// known before the fetch, and checks the items earlier rounds left uncertain.
-	if useSMTP && smtpErr == nil {
-		smtpErr = s.processOutbox(ctx, recv, accountID, true)
 	}
 	return smtpErr
 }
