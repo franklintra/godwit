@@ -35,4 +35,5 @@ We add **server drafts** (GLOSSARY: 服务器草稿), a per-account setting, off
 - A server that drops unknown header fields when another app saves a draft breaks the link: Godwit sees its copy removed (the notice) and the other app's version as another app's draft, which 编辑草稿 opens. Nothing is lost, but the user sees two drafts.
 - Inline images in another app's draft, other than the account's signature images, are dropped: the compose window cannot show them.
 - Changes Wit and plugins make reach the server at the account's next sync round, not after `ServerDraftIdle`: only the compose window's saves, attachments and account changes set the timer.
+- Each stored copy reaches local storage like any message in the Drafts folder (as a sent copy does in Sent): plugins' `message.received` hooks see it, rules and auto-labels skip it as they skip Drafts. A copy is stored at most once per `ServerDraftIdle` of a draft's quiet.
 - Gmail keeps drafts under a label; removing a copy expunges it from `[Gmail]/Drafts`. Not yet checked against Gmail's own handling of draft expunges.
