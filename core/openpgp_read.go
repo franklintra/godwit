@@ -5,6 +5,7 @@ import (
 	"errors"
 	netmail "net/mail"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/godwit-email/godwit/core/mail"
@@ -13,16 +14,16 @@ import (
 
 // What OpenPGP says of a received message's signature (OpenPGPSignature.Status).
 const (
-	OpenPGPVerified   = "verified"    // good, by a key the trust model vouches for, whose user ID has the sender's address
-	OpenPGPUnverified = "unverified"  // good, but the key is not vouched for, does not match the sender, or has expired or been revoked
-	OpenPGPUnknownKey = "unknown_key" // the signer's key is not in the keyring
-	OpenPGPBad        = "bad"         // the message or the signature was changed
-	SigCheckFailed    = "error"       // gpg could not check it
+	OpenPGPVerified    = "verified"    // good, by a key the trust model vouches for, whose user ID has the sender's address
+	OpenPGPUnverified  = "unverified"  // good, but the key is not vouched for, does not match the sender, or has expired or been revoked
+	OpenPGPUnknownKey  = "unknown_key" // the signer's key is not in the keyring
+	OpenPGPBad         = "bad"         // the message or the signature was changed
+	OpenPGPCheckFailed = "error"       // gpg could not check it
 )
 
 // OpenPGPSignature is a received message's signature as gpg checked it.
 type OpenPGPSignature struct {
-	Status string // SigVerified … SigCheckFailed
+	Status string // OpenPGPVerified … OpenPGPCheckFailed
 	// Detail is gpg's finding: good, expired, expired_key, revoked_key, bad,
 	// no_public_key or error.
 	Detail      string
@@ -93,6 +94,75 @@ func OpenPGPKind(m Message) string {
 // decrypt. What is decrypted is returned, never stored. Only Godwit's
 // interface calls it (rpcbind uiOnly): it hands out decrypted mail.
 func (s *Service) OpenPGPMessage(ctx context.Context, messageID int64) (OpenPGPView, error) {
+	messageID, err := s.resolveID(ctx, messageID)
+	if err != nil {
+		return OpenPGPView{}, err
+	}
+	return s.openpgp.get(ctx, messageID, func() (OpenPGPView, error) { return s.openpgpMessage(ctx, messageID) })
+}
+
+// openpgpCacheTTL is how long an OpenPGPMessage result is reused: the
+// reader's header and its body page each ask for the message as it opens,
+// and one gpg run (one passphrase prompt) answers both. Kept in memory only.
+const openpgpCacheTTL = 30 * time.Second
+
+// openpgpCache holds OpenPGPMessage's recent results by message, and the
+// runs under way, so a second caller waits for the first's instead of
+// running gpg again.
+type openpgpCache struct {
+	mu sync.Mutex
+	m  map[int64]*openpgpEntry
+}
+
+type openpgpEntry struct {
+	done chan struct{} // closed once v and err are set
+	at   time.Time
+	v    OpenPGPView
+	err  error
+}
+
+func (c *openpgpCache) get(ctx context.Context, id int64, run func() (OpenPGPView, error)) (OpenPGPView, error) {
+	c.mu.Lock()
+	if c.m == nil {
+		c.m = map[int64]*openpgpEntry{}
+	}
+	now := time.Now()
+	for k, e := range c.m {
+		select {
+		case <-e.done:
+			if now.Sub(e.at) > openpgpCacheTTL {
+				delete(c.m, k)
+			}
+		default:
+		}
+	}
+	if e, ok := c.m[id]; ok {
+		c.mu.Unlock()
+		select {
+		case <-e.done:
+			return e.v, e.err
+		case <-ctx.Done():
+			return OpenPGPView{}, ctx.Err()
+		}
+	}
+	e := &openpgpEntry{done: make(chan struct{})}
+	c.m[id] = e
+	c.mu.Unlock()
+	e.v, e.err = run()
+	e.at = time.Now()
+	close(e.done)
+	// A failure, or a decryption the user cancelled, is tried again next time.
+	if e.err != nil || (e.v.DecryptError != "" && e.v.DecryptError != "no_secret_key") {
+		c.mu.Lock()
+		if c.m[id] == e {
+			delete(c.m, id)
+		}
+		c.mu.Unlock()
+	}
+	return e.v, e.err
+}
+
+func (s *Service) openpgpMessage(ctx context.Context, messageID int64) (OpenPGPView, error) {
 	m, err := s.readMessage(ctx, messageID, false, true)
 	if err != nil {
 		return OpenPGPView{}, err
@@ -208,7 +278,7 @@ func (s *Service) decryptInto(ctx context.Context, g *gpg.GPG, v *OpenPGPView, d
 // against the sender's address from.
 func (s *Service) signatureView(ctx context.Context, g *gpg.GPG, r gpg.Result, err error, from string) *OpenPGPSignature {
 	if err != nil || len(r.Signatures) == 0 {
-		return &OpenPGPSignature{Status: SigCheckFailed, Detail: string(gpg.SigError)}
+		return &OpenPGPSignature{Status: OpenPGPCheckFailed, Detail: string(gpg.SigError)}
 	}
 	sig := r.Signatures[0]
 	v := &OpenPGPSignature{Detail: string(sig.Status), Fingerprint: sig.PrimaryFingerprint, KeyID: sig.KeyID,
@@ -228,7 +298,7 @@ func (s *Service) signatureView(ctx context.Context, g *gpg.GPG, r gpg.Result, e
 	case gpg.SigNoPublicKey:
 		v.Status = OpenPGPUnknownKey
 	case gpg.SigError:
-		v.Status = SigCheckFailed
+		v.Status = OpenPGPCheckFailed
 	case gpg.SigGood:
 		v.Status = OpenPGPUnverified
 		if sig.Trust.Valid() && v.MatchesSender {

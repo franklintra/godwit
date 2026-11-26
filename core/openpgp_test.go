@@ -235,6 +235,10 @@ func TestOpenPGPMessageVerify(t *testing.T) {
 	e.alice.Certify(e.bobFpr)
 	v, err = e.s.OpenPGPMessage(bg, id)
 	require.NoError(t, err)
+	assert.Equal(t, OpenPGPUnverified, v.Signature.Status, "the result is reused for a while")
+	e.s.openpgp = openpgpCache{}
+	v, err = e.s.OpenPGPMessage(bg, id)
+	require.NoError(t, err)
 	assert.Equal(t, OpenPGPVerified, v.Signature.Status)
 
 	// Signed by Bob's key, but sent as someone else.

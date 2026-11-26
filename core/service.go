@@ -186,6 +186,8 @@ type Service struct {
 	recognitionModelMu sync.Mutex       // held while 识别模型's files download (DownloadRecognitionModel)
 	recognition        recognitionState // how 识别模型 last read
 
+	openpgp openpgpCache // OpenPGPMessage's recent results, shared by the reader's header and body
+
 	unsubMu   sync.Mutex
 	unsubbing map[int64]bool // messages whose one-click unsubscribe is under way
 
