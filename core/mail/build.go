@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"mime"
 	"strings"
 	"time"
 
@@ -25,6 +26,9 @@ type Outgoing struct {
 	// signature images): sent inline, in multipart/related, when it does.
 	Related []Attachment
 	Header  map[string]string // more header fields, such as RuleHeader
+	// Headers are the draft's own fields (Draft.Headers), written in order
+	// after Godwit's; Build refuses what CheckHeaders refuses.
+	Headers []Header
 }
 
 // RuleHeader marks mail a Godwit rule forwarded; mail carrying it is never
@@ -60,8 +64,18 @@ func Build(o Outgoing, now time.Time) (raw []byte, messageID string, err error) 
 		return nil, "", err
 	}
 	messageID = hex.EncodeToString(rnd[:]) + "@" + from.Address[at+1:]
+	extra, err := CheckHeaders(o.Headers)
+	if err != nil {
+		return nil, "", err
+	}
 
 	var h gomail.Header
+	// Fields are written last added first: added before Godwit's, the
+	// draft's come after them, in reverse so in their order. A value that is
+	// not ASCII is RFC 2047 encoded, in words the writer can fold between.
+	for i := len(extra) - 1; i >= 0; i-- {
+		h.Add(extra[i].Name, mime.QEncoding.Encode("utf-8", extra[i].Value))
+	}
 	h.SetDate(now)
 	h.SetSubject(o.Subject)
 	h.SetMessageID(messageID)
