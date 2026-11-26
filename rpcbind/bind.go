@@ -15,6 +15,7 @@ import (
 	"github.com/godwit-email/godwit/core"
 	"github.com/godwit-email/godwit/core/ai"
 	"github.com/godwit-email/godwit/core/auth"
+	"github.com/godwit-email/godwit/core/mail"
 	"github.com/godwit-email/godwit/core/plugins"
 	"github.com/godwit-email/godwit/rpc"
 )
@@ -199,6 +200,10 @@ func NewCodec() *rpc.Codec {
 	rpc.RegisterType(c, "no_role_folder",
 		func(e *core.ErrNoRoleFolder) any { return *e },
 		rpc.DecodeDetail[core.ErrNoRoleFolder])
+	// A draft's header field SaveDraft refused, and why (mail.HeaderError's problems).
+	rpc.RegisterType(c, "invalid_header",
+		func(e *mail.HeaderError) any { return *e },
+		rpc.DecodeDetail[mail.HeaderError])
 	rpc.RegisterType(c, "model_error",
 		func(e *core.ModelError) any {
 			return core.ModelError{Code: e.Code, Message: e.Message, Retryable: e.Retryable}

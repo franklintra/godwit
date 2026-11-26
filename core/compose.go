@@ -33,6 +33,12 @@ type Draft struct {
 	ReplyTo, Subject, HTML string
 	Attachments            []DraftAttachment
 	UpdatedAt              time.Time
+	// Headers are more header fields the message carries, in order, such as
+	// a program's X-Tracking-ID: mail.CheckHeaders says which (no field
+	// Godwit writes, nor one that adds or redirects recipients; Reply-To is
+	// ReplyTo). SaveDraft keeps the stored ones when Headers is nil and
+	// replaces them otherwise, so an empty list removes them.
+	Headers []mail.Header
 	// Revision grows by one on every update, an attachment added or removed
 	// included (refetch it after one). SaveDraft with a non-zero Revision
 	// fails with ErrStaleDraft unless it is still the stored one.
@@ -93,6 +99,24 @@ var draftModes = map[string]bool{"new": true, "reply": true, "reply_all": true, 
 func encodeList(l []string) string {
 	b, _ := json.Marshal(l)
 	return string(b)
+}
+
+// encodeHeaders is a draft's headers as stored, or nil (SQL NULL) for nil.
+func encodeHeaders(hs []mail.Header) any {
+	if hs == nil {
+		return nil
+	}
+	b, _ := json.Marshal(hs)
+	return string(b)
+}
+
+// decodeHeaders reads a draft's stored headers; none is nil.
+func decodeHeaders(s string) []mail.Header {
+	var hs []mail.Header
+	if json.Unmarshal([]byte(s), &hs) != nil || len(hs) == 0 {
+		return nil
+	}
+	return hs
 }
 
 func nullID(id int64) any {
@@ -277,9 +301,11 @@ func (s *Service) copyAttachments(ctx context.Context, draftID, messageID int64)
 	return nil
 }
 
-// SaveDraft inserts d (ID 0) or updates its addresses, subject and body. The
-// HTML is sanitized for composing (no scripts, handlers or remote resources).
-// Attachments are changed with AddAttachment and RemoveAttachment.
+// SaveDraft inserts d (ID 0) or updates its addresses, subject, body and,
+// unless nil, headers. The HTML is sanitized for composing (no scripts,
+// handlers or remote resources); headers mail.CheckHeaders refuses fail it
+// with a *mail.HeaderError. Attachments are changed with AddAttachment and
+// RemoveAttachment.
 func (s *Service) SaveDraft(ctx context.Context, d Draft) (Draft, error) {
 	if err := s.auditMCPDraft(ctx, "SaveDraft", d.ID); err != nil {
 		return Draft{}, err
@@ -332,6 +358,10 @@ func (s *Service) saveDraft(ctx context.Context, d Draft) (out Draft, err error)
 		return Draft{}, err
 	}
 	d.HTML = html
+	if d.Headers, err = mail.CheckHeaders(d.Headers); err != nil {
+		return Draft{}, err
+	}
+	headers := encodeHeaders(d.Headers) // nil keeps the stored ones
 	now := time.Now().Unix()
 	if d.ID == 0 {
 		if !draftModes[d.Mode] {
@@ -341,9 +371,9 @@ func (s *Service) saveDraft(ctx context.Context, d Draft) (out Draft, err error)
 			return Draft{}, cmp.Or(err, ErrLocalArchive)
 		}
 		r, err := s.db.Execute(ctx, `INSERT INTO drafts(account_id, mode, source_message_id, to_addrs, cc_addrs, bcc_addrs,
-			reply_to, subject, body_html, updated_at, from_program) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			reply_to, subject, body_html, updated_at, from_program, headers) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, '[]'))`,
 			d.AccountID, d.Mode, nullID(d.SourceMessageID), encodeList(d.To), encodeList(d.Cc), encodeList(d.Bcc),
-			d.ReplyTo, d.Subject, d.HTML, now, fromProgram(ctx))
+			d.ReplyTo, d.Subject, d.HTML, now, fromProgram(ctx), headers)
 		if err != nil {
 			return Draft{}, err
 		}
@@ -353,8 +383,9 @@ func (s *Service) saveDraft(ctx context.Context, d Draft) (out Draft, err error)
 		return Draft{}, err
 	}
 	q, args := `UPDATE drafts SET to_addrs = ?, cc_addrs = ?, bcc_addrs = ?, reply_to = ?, subject = ?,
-		body_html = ?, updated_at = ?, revision = revision + 1, from_program = MAX(from_program, ?) WHERE id = ?`,
-		[]any{encodeList(d.To), encodeList(d.Cc), encodeList(d.Bcc), d.ReplyTo, d.Subject, d.HTML, now, fromProgram(ctx), d.ID}
+		body_html = ?, headers = COALESCE(?, headers), updated_at = ?, revision = revision + 1,
+		from_program = MAX(from_program, ?) WHERE id = ?`,
+		[]any{encodeList(d.To), encodeList(d.Cc), encodeList(d.Bcc), d.ReplyTo, d.Subject, d.HTML, headers, now, fromProgram(ctx), d.ID}
 	if d.Revision != 0 {
 		q, args = q+" AND revision = ?", append(args, d.Revision)
 	}
@@ -419,7 +450,7 @@ func (s *Service) DraftForApproval(ctx context.Context, approvalID int64) (int64
 // read, covering rows stored before SaveDraft sanitized.
 func (s *Service) GetDraft(ctx context.Context, id int64) (Draft, error) {
 	rows, err := s.db.Query(ctx, `SELECT account_id, mode, source_message_id, to_addrs, cc_addrs, bcc_addrs, reply_to,
-		subject, body_html, updated_at, revision, from_program, scheduled_for FROM drafts WHERE id = ?`, id)
+		subject, body_html, updated_at, revision, from_program, scheduled_for, headers FROM drafts WHERE id = ?`, id)
 	if err != nil {
 		return Draft{}, err
 	}
@@ -430,7 +461,7 @@ func (s *Service) GetDraft(ctx context.Context, id int64) (Draft, error) {
 	d := Draft{ID: id, AccountID: store.Int(r[0]), Mode: store.Str(r[1]), SourceMessageID: store.Int(r[2]),
 		To: jsonList(store.Str(r[3])), Cc: jsonList(store.Str(r[4])), Bcc: jsonList(store.Str(r[5])),
 		ReplyTo: store.Str(r[6]), Subject: store.Str(r[7]), UpdatedAt: time.Unix(store.Int(r[9]), 0), Revision: store.Int(r[10]),
-		FromProgram: store.Int(r[11]) != 0, ScheduledFor: unixMilli(r[12])}
+		FromProgram: store.Int(r[11]) != 0, ScheduledFor: unixMilli(r[12]), Headers: decodeHeaders(store.Str(r[13]))}
 	if d.HTML, err = s.sanitizeDraft(ctx, store.Str(r[8])); err != nil {
 		return Draft{}, err
 	}
@@ -785,7 +816,7 @@ func (s *Service) enqueue(ctx context.Context, draftID, rev int64, checked []str
 		return ErrReceiveOnly
 	}
 	o := mail.Outgoing{From: (&netmail.Address{Name: acc.Name, Address: acc.Email}).String(), ReplyTo: d.ReplyTo,
-		To: d.To, Cc: d.Cc, Bcc: d.Bcc, Subject: d.Subject, HTML: d.HTML, Related: related}
+		To: d.To, Cc: d.Cc, Bcc: d.Bcc, Subject: d.Subject, HTML: d.HTML, Related: related, Headers: d.Headers}
 	var stmts []sqlite.Statement
 	if rs != nil {
 		stmts = rs.stmts

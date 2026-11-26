@@ -19,6 +19,7 @@ import (
 	"github.com/godwit-email/godwit/core"
 	"github.com/godwit-email/godwit/core/ai"
 	"github.com/godwit-email/godwit/core/auth"
+	"github.com/godwit-email/godwit/core/mail"
 	"github.com/godwit-email/godwit/core/plugins"
 	"github.com/godwit-email/godwit/internal/i18n"
 	"github.com/godwit-email/godwit/rpc"
@@ -346,8 +347,9 @@ func TestWireCodesPinned(t *testing.T) {
 		"ai_error":                 &ai.Error{Code: ai.CodeCanceled},
 		"no_role_folder":           &core.ErrNoRoleFolder{Role: "junk"},
 		"model_error":              &core.ModelError{Code: "model_not_ready"},
+		"invalid_header":           &mail.HeaderError{Name: "From", Problem: mail.HeaderReserved},
 	}
-	assert.Len(t, pinned, len(sentinels())+7, "every registration is pinned")
+	assert.Len(t, pinned, len(sentinels())+8, "every registration is pinned")
 	for code, err := range pinned {
 		we := c.Encode(err, nil)
 		assert.Equal(t, rpc.CodeApp, we.Code, code)
@@ -359,7 +361,7 @@ func TestWireCodesPinned(t *testing.T) {
 // or partial business error.
 func TestBadErrorData(t *testing.T) {
 	c := rpcbind.NewCodec()
-	for _, code := range []string{"check_failed", "send_warnings", "send_blocked", "egress_approval_required", "ai_error", "no_role_folder", "model_error"} {
+	for _, code := range []string{"check_failed", "send_warnings", "send_blocked", "egress_approval_required", "ai_error", "no_role_folder", "model_error", "invalid_header"} {
 		for name, detail := range map[string]string{"missing": ``, "wrong type": `{"Plugin":1,"Steps":1,"Code":1}`, "partial": `{}`} {
 			got := c.Decode(&rpc.WireError{Code: rpc.CodeApp, Message: "m", Data: &rpc.WireErrorData{Code: code, Detail: json.RawMessage(detail)}})
 			assert.ErrorIs(t, got, rpc.ErrBadErrorData, "%s %s", code, name)

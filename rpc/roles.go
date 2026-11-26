@@ -13,7 +13,11 @@ const (
 // (including SearchContacts over local mail and cached address-book contacts,
 // with no binary avatars or network requests, and the views: their stored
 // definitions, conversations and why each is there, marking nothing read),
-// drafts, and RequestMCPSend, whose outcome core decides by the user's 通过 MCP 发送 setting. Nothing else
+// drafts (their own header fields included, which core holds to
+// mail.CheckHeaders: none that sets addresses, threading, the date or the
+// content, nor one that redirects replies, receipts or bounces, so a draft
+// still goes only where its recipients say), and RequestMCPSend, whose
+// outcome core decides by the user's 通过 MCP 发送 setting. Nothing else
 // sends, and nothing here deletes, changes accounts, address books, settings,
 // extensions or model services, decides approvals or downloads attachments.
 // SetThreadDeadline sets or clears one conversation's 期限 on this device

@@ -137,7 +137,8 @@ func (s *Service) unsubscribe(ctx context.Context, messageID int64, approved *Ap
 }
 
 // NewMailtoDraft starts a new draft from account to a mailto: link's
-// addresses, with its subject and (as plain text) body; it is never sent.
+// addresses, with its subject, (as plain text) body and the header fields
+// mail.MailtoHeader keeps; it is never sent.
 func (s *Service) NewMailtoDraft(ctx context.Context, accountID int64, link string) (Draft, error) {
 	m, err := mail.ParseMailto(link)
 	if err != nil {
@@ -148,6 +149,9 @@ func (s *Service) NewMailtoDraft(ctx context.Context, accountID int64, link stri
 		return Draft{}, err
 	}
 	d.To, d.Cc, d.Bcc, d.Subject = m.To, m.Cc, m.Bcc, defuseRefs(m.Subject)
+	for _, h := range m.Headers { // a stranger's link: no reference to the user's mail either
+		d.Headers = append(d.Headers, mail.Header{Name: h.Name, Value: defuseRefs(h.Value)})
+	}
 	if m.Body != "" {
 		d.HTML = "<p>" + escapeLines(defuseRefs(m.Body)) + "</p>" + d.HTML
 	}

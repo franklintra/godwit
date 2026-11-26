@@ -497,14 +497,18 @@ func (x *linkExpander) toolArgs(ctx context.Context, args json.RawMessage) (json
 	return out, nil
 }
 
-// expandDraft expands the link references in d's subject and body, and
-// restores the placeholders in those and its addresses (docs/adr/0025),
+// expandDraft expands the link references in d's subject, body and header
+// values, and restores the placeholders in those and its addresses (docs/adr/0025),
 // before it is checked or sent: Wit's draft tools already did, but one may be
 // typed or pasted back in.
 func (s *Service) expandDraft(ctx context.Context, d *Draft) error {
 	x := s.linkExpander()
 	d.Subject, d.HTML = x.text(ctx, d.Subject), x.text(ctx, d.HTML)
-	if hasLinkRef(d.Subject + d.HTML) {
+	values := make([]string, len(d.Headers)) // a copy: d may share its slice with the stored draft's
+	for i, h := range d.Headers {
+		values[i] = x.text(ctx, h.Value)
+	}
+	if hasLinkRef(d.Subject + d.HTML + strings.Join(values, "\n")) {
 		return ErrLinkRef
 	}
 	m, _ := s.masker() // without it, nothing restores and any placeholder is refused
@@ -516,8 +520,15 @@ func (s *Service) expandDraft(ctx context.Context, d *Draft) error {
 		return out
 	}
 	d.Subject, d.ReplyTo, d.HTML = m.Restore(d.Subject), m.Restore(d.ReplyTo), m.RestoreHTML(d.HTML)
-	d.To, d.Cc, d.Bcc = restore(d.To), restore(d.Cc), restore(d.Bcc)
-	if m.Left(strings.Join(slices.Concat([]string{d.Subject, d.ReplyTo, d.HTML}, d.To, d.Cc, d.Bcc), "\n")) {
+	d.To, d.Cc, d.Bcc, values = restore(d.To), restore(d.Cc), restore(d.Bcc), restore(values)
+	if d.Headers != nil {
+		hs := make([]gomail.Header, len(d.Headers))
+		for i, h := range d.Headers {
+			hs[i] = gomail.Header{Name: h.Name, Value: values[i]}
+		}
+		d.Headers = hs
+	}
+	if m.Left(strings.Join(slices.Concat([]string{d.Subject, d.ReplyTo, d.HTML}, d.To, d.Cc, d.Bcc, values), "\n")) {
 		return ErrPlaceholder
 	}
 	return nil

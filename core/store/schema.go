@@ -902,6 +902,10 @@ var Migrations = [][]string{{
 	// before, which compare by set_at and archived_at.
 	`ALTER TABLE thread_deadlines ADD COLUMN set_version INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE archive_marks ADD COLUMN archived_version INTEGER NOT NULL DEFAULT 0`,
+}, {
+	// A draft's own header fields, sent after Godwit's: a JSON array of
+	// {"Name","Value"} as mail.CheckHeaders left them, in order.
+	`ALTER TABLE drafts ADD COLUMN headers TEXT NOT NULL DEFAULT '[]'`,
 }}
 
 // HistoryRowsVersion is the schema version that keeps a conversation's
