@@ -183,6 +183,8 @@ func expect(s *jsonschema.Schema) string {
 		return fmt.Sprintf("integer ≥ %g", *s.Minimum)
 	case s.Type == "array" && s.Items != nil:
 		return "array of " + s.Items.Type + "s"
+	case s.Type == "object" && s.AdditionalProperties != nil && s.MaxProperties != nil:
+		return fmt.Sprintf("object of up to %d %ss", *s.MaxProperties, s.AdditionalProperties.Type)
 	case s.Type == "string" && s.MinLength != nil:
 		return "non-empty string"
 	}

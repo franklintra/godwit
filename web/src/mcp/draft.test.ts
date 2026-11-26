@@ -6,6 +6,7 @@ const shown = `draft 7 · account 2 · reply to message 40 · revision 3 · save
 <untrusted_email id="draft-7" field="to">Bob &lt;bob@example.com&gt;</untrusted_email>
 <untrusted_email id="draft-7" field="cc">carol@example.com</untrusted_email>
 <untrusted_email id="draft-7" field="subject">Re: &lt;b&gt;Plans&lt;/b&gt;</untrusted_email>
+<untrusted_email id="draft-7" field="header">X-Tracking-Id: run 42</untrusted_email>
 <untrusted_email id="draft-7" field="body">Hi Bob,
 <img src=x onerror=alert(1)> ![pixel](https://example.com/p.png)
 [click](https://example.com) &amp; https://example.com</untrusted_email>
@@ -30,6 +31,9 @@ test("a draft renders its account, recipients, subject and body as text", () => 
   expect(text).toContain("On Friday Bob wrote: lunch?");
   expect(text).toContain("notes.txt");
   expect(root.querySelector("img, a, b, script")).toBeNull();
+  const dts = [...root.querySelectorAll("dt")].map((d) => d.textContent);
+  expect(dts).toContain("X-Tracking-Id");
+  expect(text).toContain("run 42");
 });
 
 test("without the account list the account is shown by number", () => {

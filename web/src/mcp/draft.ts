@@ -89,6 +89,12 @@ export function render(root: HTMLElement, r: Result, accounts = "", actions?: Ac
     const v = field ? value(field) : from;
     if (v) head.append(el("dt", "", label), el("dd", "", v));
   }
+  // The draft's own header fields ("Name: value"): sending carries them too.
+  for (const f of fields.filter((f) => f.field === "header")) {
+    const at = f.value.indexOf(": ");
+    if (at > 0)
+      head.append(el("dt", "", f.value.slice(0, at)), el("dd", "", f.value.slice(at + 2)));
+  }
   card.append(head, el("div", "body", value("body")));
   for (const field of ["quote", "signature"]) {
     const v = value(field);
