@@ -16,6 +16,7 @@ import (
 	"github.com/godwit-email/godwit/core"
 	"github.com/godwit-email/godwit/core/coretest"
 	"github.com/godwit-email/godwit/core/mail"
+	"github.com/godwit-email/godwit/internal/gpg/gpgtest"
 	"github.com/godwit-email/godwit/mcpserver"
 	"github.com/godwit-email/godwit/rpc"
 	"github.com/godwit-email/godwit/rpcbind"
@@ -84,7 +85,7 @@ func cacheFiles(dataDir string) int {
 }
 
 var allTools = []string{"create_draft", "get_draft", "get_message", "get_thread", "list_accounts", "list_drafts",
-	"list_folders", "list_threads", "list_view_threads", "list_views", "search", "search_contacts", "send_draft", "set_reply_deadline", "show_draft", "show_mail", "update_draft"}
+	"list_folders", "list_threads", "list_view_threads", "list_views", "search", "search_contacts", "send_draft", "set_draft_openpgp", "set_reply_deadline", "show_draft", "show_mail", "update_draft"}
 
 func TestMCPListTools(t *testing.T) {
 	e := coretest.New(t, coretest.WithoutAutoSync())
@@ -104,7 +105,7 @@ func TestMCPListTools(t *testing.T) {
 	}
 	assert.Equal(t, map[string]bool{"list_accounts": true, "list_folders": true, "list_threads": true, "get_thread": true,
 		"get_message": true, "list_views": true, "list_view_threads": true, "search": true, "search_contacts": true, "list_drafts": true, "get_draft": true, "show_draft": true, "show_mail": true,
-		"create_draft": false, "update_draft": false, "send_draft": false, "set_reply_deadline": false}, readOnly)
+		"create_draft": false, "update_draft": false, "send_draft": false, "set_draft_openpgp": false, "set_reply_deadline": false}, readOnly)
 	assert.Contains(t, cs.InitializeResult().Instructions, "untrusted_email")
 	assert.NotContains(t, cs.InitializeResult().Instructions, "cannot send")
 	assert.Contains(t, cs.InitializeResult().Instructions, "Send through MCP")
@@ -697,4 +698,39 @@ func TestMCPSearchContacts(t *testing.T) {
 
 	none := ok(t, cs, "search_contacts", map[string]any{"query": "nobody-matches-this"})
 	assert.Equal(t, "no contacts found", none)
+}
+
+// set_draft_openpgp raises a draft's protection and never lowers it.
+func TestMCPSetDraftOpenPGP(t *testing.T) {
+	k := gpgtest.New(t)
+	fpr := k.Gen("Alice <alice@example.com>")
+	t.Setenv("GNUPGHOME", k.GPG.Home)
+	e := coretest.New(t, coretest.WithoutAutoSync())
+	ctx := t.Context()
+	acc := e.AddAccount(t, "alice@example.com")
+	_, err := e.Svc.SetAccountOpenPGP(ctx, acc.ID, core.AccountOpenPGP{Key: fpr, SignByDefault: true})
+	require.NoError(t, err)
+	d, err := e.Svc.NewDraft(ctx, acc.ID, "new", 0)
+	require.NoError(t, err)
+	cs, _ := bridge(t, e)
+	assert.Contains(t, ok(t, cs, "get_draft", map[string]any{"draft_id": d.ID}), "openpgp: signed, encrypt off\n")
+
+	text := ok(t, cs, "set_draft_openpgp", map[string]any{"draft_id": d.ID, "revision": d.Revision, "encrypt": "on"})
+	assert.Equal(t, fmt.Sprintf("draft %d · revision %d · openpgp: signed, encrypt on", d.ID, d.Revision+1), text)
+	got, err := e.Svc.GetDraft(ctx, d.ID)
+	require.NoError(t, err)
+	assert.Equal(t, core.DraftOpenPGP{Sign: true, Encrypt: core.OpenPGPEncryptOn}, got.OpenPGP)
+	assert.True(t, got.FromProgram)
+
+	for _, args := range []map[string]any{
+		{"draft_id": d.ID, "revision": got.Revision, "sign": false},
+		{"draft_id": d.ID, "revision": got.Revision, "encrypt": "auto"},
+		{"draft_id": d.ID, "revision": d.Revision, "encrypt": "on"}, // stale
+	} {
+		text, isErr := call(t, cs, "set_draft_openpgp", args)
+		assert.True(t, isErr, "%v: %s", args, text)
+	}
+	again, err := e.Svc.GetDraft(ctx, d.ID)
+	require.NoError(t, err)
+	assert.Equal(t, got.OpenPGP, again.OpenPGP, "nothing lowered")
 }

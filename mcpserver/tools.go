@@ -49,6 +49,8 @@ var tools = []tool{
 		`{"type":"object","properties":{"draft_id":{"type":"integer","minimum":1},"revision":{"type":"integer","minimum":1},"subject":{"type":"string"},"to":{"type":"array","items":{"type":"string"}},"cc":{"type":"array","items":{"type":"string"}},"body":{"type":"string"}},"required":["draft_id","revision"],"additionalProperties":false}`, updateDraft},
 	{"send_draft", "Ask Godwit to send a draft as it is at revision (from get_draft). The user's Send through MCP setting decides: off fails; confirm (the default) returns at once while Godwit asks the user, who may decline; direct queues it in the outbox. If the draft changed since revision, nothing is sent; read it again.", false,
 		`{"type":"object","properties":{"draft_id":{"type":"integer","minimum":1},"revision":{"type":"integer","minimum":1}},"required":["draft_id","revision"],"additionalProperties":false}`, sendDraft},
+	{"set_draft_openpgp", "Choose how a draft is protected with OpenPGP when it is sent, through the user's own GnuPG: sign (with its account's key) and encrypt (off; auto: only when every recipient has a valid key in the user's keyring; on: sending fails until every recipient has one). Fields left out stay as they are. You can only turn protection on or up: turning signing or encryption off or down is refused, and only the user does it in Godwit. revision is the draft's from get_draft. It sends nothing and looks no key up.", false,
+		`{"type":"object","properties":{"draft_id":{"type":"integer","minimum":1},"revision":{"type":"integer","minimum":1},"sign":{"type":"boolean"},"encrypt":{"type":"string","enum":["off","auto","on"]}},"required":["draft_id","revision"],"additionalProperties":false}`, setDraftOpenPGP},
 	{"set_reply_deadline", "Sets or clears the date by which the sender wants your reply to a conversation that is waiting on you. Needs the message that asks for it; a quote must appear word for word in that message. Stored only on this device and shown with its source; it reorders the user's views and never sends, moves or changes mail. It cannot replace or clear a date the user set.", false,
 		`{"type":"object","properties":{"thread_id":{"type":"integer","minimum":1},"message_id":{"type":"integer","minimum":1},"date":{"type":"string","description":"YYYY-MM-DD in the user's calendar; empty clears it"},"time":{"type":"string","description":"HH:MM, the user's local time; leave out for the end of the day"},"quote":{"type":"string","maxLength":` + strconv.Itoa(core.MaxDeadlineQuote) + `}},"required":["thread_id","message_id","date"],"additionalProperties":false}`, setReplyDeadline},
 }
@@ -531,6 +533,47 @@ func updateDraft(ctx context.Context, c *rpc.Client, args json.RawMessage) (stri
 	return save(ctx, c, a.DraftID, a.Revision, a.edit)
 }
 
+// setDraftOpenPGP merges the choices given into the draft's and sets them;
+// core refuses a downgrade from this role.
+func setDraftOpenPGP(ctx context.Context, c *rpc.Client, args json.RawMessage) (string, error) {
+	var a struct {
+		DraftID  int64   `json:"draft_id"`
+		Revision int64   `json:"revision"`
+		Sign     *bool   `json:"sign"`
+		Encrypt  *string `json:"encrypt"`
+	}
+	if err := decode(args, &a); err != nil {
+		return "", err
+	}
+	var d core.Draft
+	if err := c.Call(ctx, "GetDraft", &d, a.DraftID); err != nil {
+		return "", err
+	}
+	if d.Revision != a.Revision {
+		return "", core.ErrStaleDraft
+	}
+	o := d.OpenPGP
+	if a.Sign != nil {
+		o.Sign = *a.Sign
+	}
+	if a.Encrypt != nil {
+		o.Encrypt = *a.Encrypt
+	}
+	if err := c.Call(ctx, "SetDraftOpenPGP", &d, a.DraftID, a.Revision, o); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("draft %d · revision %d · %s", d.ID, d.Revision, openpgpLine(d.OpenPGP)), nil
+}
+
+// openpgpLine says how a draft is protected when sent.
+func openpgpLine(o core.DraftOpenPGP) string {
+	sign := "not signed"
+	if o.Sign {
+		sign = "signed"
+	}
+	return "openpgp: " + sign + ", encrypt " + cmp.Or(o.Encrypt, core.OpenPGPEncryptOff)
+}
+
 // sendDraft relays the request; Godwit's core decides by the setting.
 func sendDraft(ctx context.Context, c *rpc.Client, args json.RawMessage) (string, error) {
 	var a struct {
@@ -620,6 +663,9 @@ func draft(b *strings.Builder, d core.Draft, full bool) {
 		fmt.Fprintf(b, " to message %d", d.SourceMessageID)
 	}
 	fmt.Fprintf(b, " · revision %d · saved %s\n", d.Revision, stamp(d.UpdatedAt))
+	if d.OpenPGP.Sign || (d.OpenPGP.Encrypt != "" && d.OpenPGP.Encrypt != core.OpenPGPEncryptOff) {
+		b.WriteString(openpgpLine(d.OpenPGP) + "\n")
+	}
 	id := fmt.Sprintf("draft-%d", d.ID)
 	untrusted(b, id, "to", strings.Join(d.To, ", "))
 	untrusted(b, id, "cc", strings.Join(d.Cc, ", "))
