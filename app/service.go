@@ -15,6 +15,7 @@ import (
 type Service interface {
 	AccountIcon(ctx context.Context, id int64) (core.AccountIcon, error)
 	AddAccount(ctx context.Context, in core.AccountInput) (core.Account, error)
+	AddIdentity(ctx context.Context, accountID int64, in core.IdentityInput) (core.Identity, error)
 	AddLocalArchive(ctx context.Context, name string) (core.Account, error)
 	AddMCPServer(ctx context.Context, in core.MCPServerInput) (core.MCPServer, error)
 	AddModelService(ctx context.Context, in core.ModelServiceInput) (core.ModelService, error)
@@ -84,6 +85,7 @@ type Service interface {
 	ListAccounts(ctx context.Context) ([]core.Account, error)
 	ListActions(ctx context.Context, kind string) ([]core.ActionInfo, error)
 	ListConversations(ctx context.Context, kind string) ([]core.Conversation, error)
+	ListIdentities(ctx context.Context, accountID int64) ([]core.Identity, error)
 	ListDrafts(ctx context.Context, accountID int64) ([]core.Draft, error)
 	ListFolders(ctx context.Context, accountID int64) ([]core.Folder, error)
 	ListLabels(ctx context.Context) ([]core.Label, error)
@@ -137,6 +139,7 @@ type Service interface {
 	RefreshMCPTools(ctx context.Context, id int64) error
 	RefreshPluginRegistry(ctx context.Context) error
 	RemoveAccount(ctx context.Context, id int64) error
+	RemoveIdentity(ctx context.Context, id int64) error
 	RemoveAppAndWitDeadlines(ctx context.Context) ([]core.RemovedDeadline, error)
 	RemoveMCPServer(ctx context.Context, id int64) error
 	RemoveModelFiles(ctx context.Context, ref string) error
@@ -211,6 +214,7 @@ type Service interface {
 	UnsubscribeMethod(ctx context.Context, messageID int64) (core.Unsubscribe, error)
 	UntrustImageSender(ctx context.Context, addr string) error
 	UpdateAccount(ctx context.Context, id int64, p core.AccountPatch) (core.Account, error)
+	UpdateIdentity(ctx context.Context, id int64, p core.IdentityPatch) (core.Identity, error)
 	UpdateLabel(ctx context.Context, id int64, in core.LabelInput) (core.Label, error)
 	UpdateMCPServer(ctx context.Context, id int64, in core.MCPServerInput) (core.MCPServer, error)
 	UpdateModelService(ctx context.Context, id int64, in core.ModelServiceInput) (core.ModelService, error)

@@ -47,8 +47,9 @@ const html = (ps: string[]) => ps.map((p) => `<p>${p}</p>`).join("");
 
 export const compose = (mode: "light" | "dark", withBody: boolean): ComposeState => ({
   draftId: 1,
-  accounts: [{ id: 1, email: "you@example.com" }],
+  accounts: [{ id: 1, email: "you@example.com", identities: [] }],
   from: 1,
+  identity: 0,
   to: ["Lena Fischer <lena@partner.example>"],
   cc: [],
   bcc: [],

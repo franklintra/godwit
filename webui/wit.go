@@ -568,6 +568,7 @@ type BodyChange struct {
 	// added since the window opened.
 	Accounts []Account `json:"accounts"`
 	From     int64     `json:"from"`
+	Identity int64     `json:"identity"`
 	Quote    string    `json:"quote"`
 	To       []string  `json:"to"`
 	Cc       []string  `json:"cc"`
@@ -750,7 +751,7 @@ func bodyChange(ctx context.Context, svc Service, s *session, err error) (BodyCh
 		return BodyChange{}, keyed(err)
 	}
 	body := s.adopt(d)
-	return BodyChange{Change: ch, Accounts: accs, From: d.AccountID, Quote: mail.HTMLToText(s.quote), To: nz(d.To), Cc: nz(d.Cc),
+	return BodyChange{Change: ch, Accounts: accs, From: d.AccountID, Identity: d.IdentityID, Quote: mail.HTMLToText(s.quote), To: nz(d.To), Cc: nz(d.Cc),
 		Bcc: nz(d.Bcc), ReplyTo: d.ReplyTo, Subject: d.Subject, Body: body, FromProgram: d.FromProgram}, nil
 }
 

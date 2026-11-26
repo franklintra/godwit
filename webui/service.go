@@ -37,6 +37,7 @@ type Service interface {
 	ListAccounts(ctx context.Context) ([]core.Account, error)
 	ListApprovals(ctx context.Context, conversationID int64) ([]core.Approval, error)
 	ListConversations(ctx context.Context, kind string) ([]core.Conversation, error)
+	ListIdentities(ctx context.Context, accountID int64) ([]core.Identity, error)
 	ListModelServices(ctx context.Context) ([]core.ModelService, error)
 	ListPluginModels(ctx context.Context) ([]core.PluginModels, error)
 	ListSkills(ctx context.Context) ([]core.SkillInfo, error)
@@ -61,6 +62,7 @@ type Service interface {
 	SenderAvatar(ctx context.Context, messageID int64, allowRemote bool) (core.Avatar, error)
 	SetConversationModel(ctx context.Context, id int64, ref, effort string) error
 	SetDraftAccount(ctx context.Context, id, accountID, revision int64) (core.Draft, error)
+	SetDraftFrom(ctx context.Context, id, accountID, identityID, revision int64) (core.Draft, error)
 	SetDraftModel(ctx context.Context, draftID int64, model string) error
 	SignatureEditor(ctx context.Context, id int64) (string, error)
 	SignatureShown(ctx context.Context, block string) (string, error)

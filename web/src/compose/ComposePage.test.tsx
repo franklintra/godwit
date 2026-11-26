@@ -14,6 +14,7 @@ vi.mock("@/mygo", () => ({
     closed: vi.fn(),
     latest: vi.fn(),
     setAccount: vi.fn(),
+    setFrom: vi.fn(),
     addAttachments: vi.fn(),
     removeAttachment: vi.fn(),
     send: vi.fn(),
@@ -79,10 +80,11 @@ const theme = { mode: "light", light: {}, dark: {}, fontSize: 14, bodyFontSize: 
 const state = {
   draftId: 1,
   accounts: [
-    { id: 1, email: "me@x.com" },
-    { id: 2, email: "work@x.com" },
+    { id: 1, email: "me@x.com", identities: [{ id: 5, name: "Belcova", email: "contact@x.com" }] },
+    { id: 2, email: "work@x.com", identities: [] },
   ],
   from: 1,
+  identity: 0,
   to: ["a@x.com"],
   cc: [],
   bcc: [],
@@ -605,20 +607,21 @@ test("an edit clears the warnings", async () => {
 });
 
 test("account switch keeps body", async () => {
-  vi.mocked(api.setAccount).mockResolvedValue({
+  vi.mocked(api.setFrom).mockResolvedValue({
     revision: 9,
     attachments: [],
     conflict: false,
     signatureHtml: '<p>-- work</p><img src="data:image/png;base64,AAAA">',
     updatedAt: new Date(2026, 9, 10, 11, 42).getTime(),
+    replyTo: "",
   });
   render(<ComposePage />);
   const el = await body();
   fireEvent.change(el, { target: { value: "正文!" } });
   await pickAccount("work@x.com");
-  await waitFor(() => expect(api.setAccount).toHaveBeenCalledWith(2, 8));
+  await waitFor(() => expect(api.setFrom).toHaveBeenCalledWith(2, 0, 8));
   expect(api.save).toHaveBeenCalledWith(expect.objectContaining({ body: "正文!" }));
-  expect(order(vi.mocked(api.save))).toBeLessThan(order(vi.mocked(api.setAccount)));
+  expect(order(vi.mocked(api.save))).toBeLessThan(order(vi.mocked(api.setFrom)));
   const sig = (await screen.findByText("-- work")).closest('[data-slot="signature-preview"]');
   expect(sig?.querySelector("img")?.getAttribute("src")).toBe("data:image/png;base64,AAAA");
   expect(el).toHaveValue("正文!");
@@ -640,18 +643,41 @@ test("a signature laid out with a table shows as its HTML, table kept", async ()
   expect(screen.getByText("CEO").tagName).toBe("TD");
 });
 
+test("picking an identity sends as it, with its signature and Reply-To", async () => {
+  vi.mocked(api.setFrom).mockResolvedValue({
+    revision: 8,
+    attachments: [],
+    conflict: false,
+    signatureHtml: "<p>-- Belcova</p>",
+    updatedAt: new Date(2026, 9, 10, 11, 42).getTime(),
+    replyTo: "team@x.com",
+  });
+  render(<ComposePage />);
+  await body();
+  await pickAccount("Belcova <contact@x.com>");
+  await waitFor(() => expect(api.setFrom).toHaveBeenCalledWith(1, 5, 7));
+  expect(await screen.findByText("-- Belcova")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "发件账户" })).toHaveTextContent("contact@x.com");
+  // The Reply-To the switch set shows, and the next save keeps it.
+  expect(await screen.findByRole("button", { name: "移除 team@x.com" })).toBeInTheDocument();
+  await waitFor(() =>
+    expect(api.save).toHaveBeenLastCalledWith(expect.objectContaining({ replyTo: "team@x.com" })),
+  );
+});
+
 test("an account switch that conflicts reverts the pill", async () => {
-  vi.mocked(api.setAccount).mockResolvedValue({
+  vi.mocked(api.setFrom).mockResolvedValue({
     revision: 0,
     attachments: [],
     conflict: true,
     signatureHtml: "",
     updatedAt: 0,
+    replyTo: "",
   });
   render(<ComposePage />);
   await body();
   await pickAccount("work@x.com");
-  await waitFor(() => expect(api.setAccount).toHaveBeenCalled());
+  await waitFor(() => expect(api.setFrom).toHaveBeenCalled());
   // behind the conflict's dialog, which hides the page from the a11y tree
   await waitFor(() =>
     expect(screen.getByRole("button", { name: "发件账户", hidden: true })).toHaveTextContent(

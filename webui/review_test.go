@@ -291,5 +291,5 @@ func TestComposeDecideRecipients(t *testing.T) {
 	assert.Equal(t, []string{"eve@example.com"}, bc.Bcc)
 	assert.Equal(t, []string{"ann@example.com"}, bc.To)
 	assert.Equal(t, added.ID, bc.From)
-	assert.Contains(t, bc.Accounts, Account{ID: added.ID, Email: added.Email})
+	assert.Contains(t, bc.Accounts, Account{ID: added.ID, Email: added.Email, Identities: []Identity{}})
 }

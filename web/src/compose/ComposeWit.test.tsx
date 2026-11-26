@@ -125,8 +125,9 @@ const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 const state: ComposeState = {
   draftId: 1,
-  accounts: [{ id: 1, email: "me@x.com" }],
+  accounts: [{ id: 1, email: "me@x.com", identities: [] }],
   from: 1,
+  identity: 0,
   to: ["a@x.com"],
   cc: [],
   bcc: [],
@@ -237,6 +238,7 @@ const change = (body: string, revision: number): BodyChange => ({
   revision,
   accounts: state.accounts,
   from: state.from,
+  identity: 0,
   quote: state.quote,
   to: state.to,
   cc: [],
@@ -1037,7 +1039,7 @@ test("a reload shows the recipients and attachments changed behind the window", 
 test("the saver takes a reload's revision only once its recipients and account show", async () => {
   vi.mocked(api.latest).mockResolvedValue({
     ...latest("Wit 写的", 9),
-    accounts: [...state.accounts, { id: 2, email: "new@x.com" }], // added since the window opened
+    accounts: [...state.accounts, { id: 2, email: "new@x.com", identities: [] }], // added since the window opened
     from: 2,
     bcc: ["eve@x.com"],
   });

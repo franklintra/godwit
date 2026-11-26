@@ -2,8 +2,8 @@ import { RiArrowDownSLine } from "@remixicon/react";
 import { type ReactNode, type Ref, useId, useImperativeHandle, useRef, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { type PopupMenu, popupUnder } from "@/components/wit-menu";
-import type { Account, ContactHit } from "@/mygo";
+import { type PopupMenu, popupUnder, separator } from "@/components/wit-menu";
+import type { Account, ContactHit, MenuEntry } from "@/mygo";
 import type { T } from "@/shared/i18n";
 import { AddressInput } from "./AddressInput";
 import { commit, invalid } from "./address";
@@ -30,6 +30,34 @@ export interface FieldsHandle {
 
 const none: Record<AddressKey, string> = { to: "", cc: "", bcc: "", replyTo: "" };
 
+/** The From menu's entries: each account's address, then its identities as "Name <address>". */
+export function fromEntries(accounts: Account[], from: number, identity: number): MenuEntry[] {
+  const out: MenuEntry[] = [];
+  for (const a of accounts) {
+    const ids = a.identities ?? [];
+    if (ids.length > 0 && out.length > 0) out.push(separator);
+    out.push({ id: `${a.id}:0`, label: a.email, radio: true, checked: a.id === from && identity === 0 });
+    for (const i of ids) {
+      out.push({
+        id: `${a.id}:${i.id}`,
+        label: i.name ? `${i.name} <${i.email}>` : i.email,
+        radio: true,
+        checked: a.id === from && i.id === identity,
+      });
+    }
+    if (ids.length > 0) out.push(separator);
+  }
+  if (out.at(-1)?.separator) out.pop();
+  return out;
+}
+
+/** The address the draft is sent as: its identity's, else its account's. */
+export function fromAddress(accounts: Account[], from: number, identity: number) {
+  const a = accounts.find((x) => x.id === from);
+  const i = identity ? a?.identities?.find((x) => x.id === identity) : undefined;
+  return { email: i?.email ?? a?.email, title: i?.name ? `${i.name} <${i.email}>` : (i?.email ?? a?.email) };
+}
+
 /**
  * The header fields: To; Cc, Bcc and Reply-To behind 抄送 · 密送 unless one has a value;
  * the invalid addresses; Subject; From. `frozen` (an operation running) makes them all read-only.
@@ -38,6 +66,7 @@ export function Fields({
   ref,
   accounts,
   from,
+  identity = 0,
   onFrom,
   menu,
   to,
@@ -53,8 +82,10 @@ export function Fields({
   ref?: Ref<FieldsHandle>;
   accounts: Account[];
   from: number;
-  onFrom(id: number): void;
-  /** Shows the accounts as the system's menu (the pages' PopupMenu). */
+  /** The account's identity the draft is sent as, 0 for the account's own address (ADR 0045). */
+  identity?: number;
+  onFrom(account: number, identity: number): void;
+  /** Shows the accounts and their identities as the system's menu (the pages' PopupMenu). */
   menu: PopupMenu;
   to: string[];
   cc: string[];
@@ -78,7 +109,7 @@ export function Fields({
   const typing = Object.values(pending).some(Boolean);
   if (clash && !typing) setClash(false);
   const lists: Record<AddressKey, string[]> = { to, cc, bcc, replyTo: replyTo ? [replyTo] : [] };
-  const fromEmail = accounts.find((a) => a.id === from)?.email;
+  const { email: fromEmail, title: fromTitle } = fromAddress(accounts, from, identity);
 
   const set = (k: AddressKey, l: string[]) =>
     onChange(k === "replyTo" ? { replyTo: l.at(-1) ?? "" } : { [k]: l });
@@ -194,27 +225,20 @@ export function Fields({
       {row(
         "from",
         t("compose.from"),
-        // The sending account: the pill is the value; the system's menu lists the accounts, the one
-        // in use checked, as the design's menus are the system's.
+        // The sending account or identity: the pill is the value; the system's menu lists the
+        // accounts and their identities, the one in use checked, as the design's menus are the system's.
         <button
           type="button"
           id={`${id}from`}
           aria-label={t("compose.from.select")}
-          title={fromEmail}
+          title={fromTitle}
           disabled={frozen}
           className="flex h-6 min-w-0 items-center gap-1 rounded-md bg-(--hover-tint) px-2 font-medium text-xs transition-colors hover:bg-(--tint-2) focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50"
           onClick={async (e) => {
-            const chosen = await popupUnder(
-              menu,
-              e.currentTarget,
-              accounts.map((a) => ({
-                id: String(a.id),
-                label: a.email,
-                radio: true,
-                checked: a.id === from,
-              })),
-            );
-            if (chosen && !frozenNow.current && Number(chosen) !== from) onFrom(Number(chosen));
+            const chosen = await popupUnder(menu, e.currentTarget, fromEntries(accounts, from, identity));
+            if (!chosen || frozenNow.current) return;
+            const [account, ident] = chosen.split(":").map(Number);
+            if (account !== from || ident !== identity) onFrom(account, ident);
           }}
         >
           <span className="min-w-0 truncate">{fromEmail}</span>
