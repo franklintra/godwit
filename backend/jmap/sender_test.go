@@ -132,6 +132,26 @@ func TestSendIdentityMatchingAndNoIdentityRejected(t *testing.T) {
 	}
 }
 
+// Mail written as another identity of the account (its From header is not
+// the envelope sender) is submitted with that address's identity and from
+// it: the server checks the From header against the identity.
+func TestSendAsFromHeaderIdentity(t *testing.T) {
+	srv := newTestServer(t, "alice@example.com")
+	srv.SetIdentities("alice@example.com", "team@corp.example")
+	snd := newTestSender(srv.Server, "secret")
+	team := strings.ReplaceAll(testRaw, "Alice <alice@example.com>", "Team <team@corp.example>")
+	if err := snd.Send(t.Context(), "alice@example.com", []string{"bob@example.com"}, []byte(team)); err != nil {
+		t.Fatalf("Send as team: %v", err)
+	}
+	subs := srv.Submissions()
+	if len(subs) != 1 {
+		t.Fatalf("got %d submissions, want 1", len(subs))
+	}
+	if subs[0].MailFrom != "team@corp.example" {
+		t.Errorf("MailFrom = %q, want team@corp.example", subs[0].MailFrom)
+	}
+}
+
 func TestSendNotCreatedMapsToRejectedErrorAndCleansStagedDraft(t *testing.T) {
 	for _, tc := range []struct {
 		typ       string

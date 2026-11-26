@@ -217,6 +217,7 @@ type App struct {
 	labels        []core.Label           // in the user's order, as the last load read them
 	accountLabels map[int64][]core.Label // labels with counts scoped to each account
 	signatures    []core.Signature       // oldest first, as the last load read them
+	identities    []core.Identity        // every account's 发件身份, as the last load read them
 	addressBooks  []core.AddressBook     // in priority order, as the last load read them
 	trusted       []string               // the senders whose remote images load at once, as the last load read them
 	blocked       []string               // the blocked senders, as the last load read them or a block changed them
@@ -424,6 +425,8 @@ func (a *App) load() {
 	var labels []core.Label
 	var accLabels map[int64][]core.Label
 	var sigs []core.Signature
+	var idents []core.Identity
+	identsRead := false
 	var addressBooks []core.AddressBook
 	booksRead := false
 	var trusted, blocked []string
@@ -439,6 +442,9 @@ func (a *App) load() {
 		labels, _ = a.svc.ListLabels(ctx) // chips only: a failure keeps the last ones
 		accLabels, _ = a.svc.AllAccountLabels(ctx)
 		sigs, _ = a.svc.ListSignatures(ctx) // likewise
+		if ids, err := a.svc.ListIdentities(ctx, 0); err == nil {
+			idents, identsRead = ids, true
+		}
 		if ab, abErr := a.svc.ListAddressBooks(ctx); abErr == nil {
 			addressBooks, booksRead = ab, true
 		}
@@ -509,6 +515,9 @@ func (a *App) load() {
 		}
 		if sigs != nil {
 			a.signatures = sigs
+		}
+		if identsRead {
+			a.identities = idents
 		}
 		if booksRead {
 			a.addressBooks = addressBooks

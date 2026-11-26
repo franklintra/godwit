@@ -5,6 +5,18 @@ type Account struct {
 	// ID and Email identify the account.
 	ID    int64  `json:"id"`
 	Email string `json:"email"`
+	// Identities are the account's 发件身份 (ADR 0048): other names and
+	// addresses it sends as, each also a sender to pick.
+	Identities []Identity `json:"identities"`
+}
+
+// Identity is another name and address an account sends as.
+type Identity struct {
+	// ID names it to SetFrom; Name ("" for the account's) and Email are
+	// what the From header shows.
+	ID    int64  `json:"id"`
+	Name  string `json:"name"`
+	Email string `json:"email"`
 }
 
 // Attachment is a file attached to the draft.
@@ -27,8 +39,10 @@ type ComposeState struct {
 	// DraftID is the window's draft; Accounts are the senders to pick from.
 	DraftID  int64     `json:"draftId"`
 	Accounts []Account `json:"accounts"`
-	// From is the sending account's ID.
-	From int64 `json:"from"`
+	// From is the sending account's ID; Identity the account's identity the
+	// draft is sent as, 0 for the account's own address.
+	From     int64 `json:"from"`
+	Identity int64 `json:"identity"`
 	// To, Cc, Bcc, ReplyTo and Subject are the header fields as stored.
 	To      []string `json:"to"`
 	Cc      []string `json:"cc"`
@@ -99,6 +113,14 @@ type Change struct {
 	SignatureHTML string `json:"signatureHtml"`
 	// UpdatedAt is when the draft was last stored, in Unix milliseconds.
 	UpdatedAt int64 `json:"updatedAt"`
+}
+
+// FromChange is the outcome of a sender switch (SetFrom).
+type FromChange struct {
+	Change
+	// ReplyTo is the draft's stored Reply-To: the switch may have set the
+	// identity's, and the page then shows it.
+	ReplyTo string `json:"replyTo"`
 }
 
 // AttachResult is the outcome of adding files: a partial success is no error.

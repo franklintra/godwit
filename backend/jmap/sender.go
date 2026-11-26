@@ -94,7 +94,19 @@ func (s *Sender) send(ctx context.Context, from string, rcpts []string, raw []by
 	boxes := meta[0].(*mailbox.GetResponse).List
 	identities := meta[1].(*identity.GetResponse).List
 
-	idID, ok := matchIdentity(identities, from)
+	// Mail written as one of the account's other identities (a From header
+	// other than the envelope sender, ADR 0048) is submitted with the identity
+	// of that address, and from it: the server checks the message's From
+	// against the identity it is sent with.
+	idID, ok := gojmap.ID(""), false
+	if hf := headerFrom(raw); hf != "" && !strings.EqualFold(hf, from) {
+		if idID, ok = matchIdentity(identities, hf); ok {
+			from = hf
+		}
+	}
+	if !ok {
+		idID, ok = matchIdentity(identities, from)
+	}
 	if !ok {
 		return &backend.RejectedError{
 			Stage:    "MAIL",

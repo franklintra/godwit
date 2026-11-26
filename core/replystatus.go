@@ -104,7 +104,7 @@ func ownKey(addr string) string {
 
 func (s *Service) mailPeople(ctx context.Context, roles map[int64]string) (mailPeople, error) {
 	p := mailPeople{own: map[string]bool{}, known: map[string]bool{}}
-	acc, err := s.db.Query(ctx, "SELECT email FROM accounts")
+	acc, err := s.db.Query(ctx, ownEmails) // accounts' and 发件身份' addresses
 	if err != nil {
 		return p, err
 	}

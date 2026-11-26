@@ -1980,10 +1980,7 @@ func senderOf(m core.MessageSummary) (name, addr string) {
 // the user under Cc; when neither (Bcc, a list), To's first; with no To or Cc,
 // the account.
 func (r *reader) recipients(m core.MessageSummary) string {
-	accounts := r.p.a.accounts
-	mine := func(addr string) bool {
-		return slices.ContainsFunc(accounts, func(a core.Account) bool { return strings.EqualFold(a.Email, addr) })
-	}
+	mine := r.p.a.ownAddress         // an account's address or one of its identities
 	me := func(addr string) string { // which address got it shows in the expanded recipients
 		return cmp.Or(r.alias(addr), i18n.T("reader.me"))
 	}

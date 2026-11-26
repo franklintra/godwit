@@ -197,7 +197,7 @@ func addUniqueTerm(dst *[]string, s string) {
 }
 
 func (s *Service) ownAddrSet(ctx context.Context) (map[string]bool, error) {
-	own, err := s.db.Query(ctx, "SELECT email FROM accounts")
+	own, err := s.db.Query(ctx, ownEmails) // accounts' and 发件身份' addresses
 	if err != nil {
 		return nil, err
 	}

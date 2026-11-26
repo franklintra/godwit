@@ -16,7 +16,9 @@ const (
 // drafts (their own header fields included, which core holds to
 // mail.CheckHeaders: none that sets addresses, threading, the date or the
 // content, nor one that redirects replies, receipts or bounces, so a draft
-// still goes only where its recipients say), and RequestMCPSend, whose
+// still goes only where its recipients say; SetDraftFrom picks the account
+// and 发件身份 a draft is sent as, as NewDraft picks the account;
+// ListIdentities reads the stored ones), and RequestMCPSend, whose
 // outcome core decides by the user's 通过 MCP 发送 setting. Nothing else
 // sends, and nothing here deletes, changes accounts, address books, settings,
 // extensions or model services, decides approvals or downloads attachments.
@@ -27,6 +29,7 @@ var mcpMethods = map[string]bool{
 	"ListAccounts": true, "ListFolders": true, "ListThreads": true, "GetThread": true,
 	"ListMessages": true, "GetMessageText": true, "Search": true, "SearchContacts": true,
 	"ListDrafts": true, "GetDraft": true, "NewDraft": true, "SaveDraft": true,
+	"ListIdentities": true, "SetDraftFrom": true,
 	"SavedViews": true, "ViewContents": true, "ViewGroupPage": true,
 	"RequestMCPSend": true, "SetThreadDeadline": true,
 }

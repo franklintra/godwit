@@ -296,6 +296,7 @@ function Compose({
   const [initial, setInitial] = useState({ body: state.body, n: 0 }); // n remounts the editor
   const [fieldsKey, setFieldsKey] = useState(0); // remounts the fields
   const [from, setFrom] = useState(state.from);
+  const [identity, setIdentity] = useState(state.identity); // ADR 0048: 0 is the account's own address
   const [accounts, setAccounts] = useState(state.accounts);
   const [fromProgram, setFromProgram] = useState(state.fromProgram); // ADR 0043: check before sending
   const [signature, setSignature] = useState(sigOf(state));
@@ -418,6 +419,7 @@ function Compose({
       setF(cur.current);
       setAccounts(l.accounts); // the account may be one added since the window opened
       setFrom(l.from);
+      setIdentity(l.identity);
       setFromProgram(l.fromProgram);
       setSignature(sigOf(l));
       setQuote(l.quote);
@@ -608,19 +610,26 @@ function Compose({
       setSending(false);
     }
   };
-  const onFrom = async (id: number) => {
-    if (!sv || id === from) return;
-    const prev = from;
-    setFrom(id);
+  const onFrom = async (account: number, ident: number) => {
+    if (!sv || (account === from && ident === identity)) return;
+    const prev = { from, identity };
+    const back = () => {
+      setFrom(prev.from);
+      setIdentity(prev.identity);
+    };
+    setFrom(account);
+    setIdentity(ident);
     try {
-      const r = await sv.run((rev) => api.setAccount(id, rev));
-      if (!r || r.conflict) setFrom(prev);
+      const r = await sv.run((rev) => api.setFrom(account, ident, rev));
+      if (!r || r.conflict) back();
       else {
         setSignature(sigOf(r));
         setSavedAt(fmt(new Date(r.updatedAt)));
+        // The identity's Reply-To may have replaced the draft's: shown, and kept by the next save.
+        if (r.replyTo !== cur.current.replyTo) edit({ replyTo: r.replyTo });
       }
     } catch (e) {
-      setFrom(prev);
+      back();
       failure(e);
     }
   };
@@ -766,6 +775,7 @@ function Compose({
       flushSync(() => {
         setAccounts(l.accounts);
         setFrom(l.from);
+        setIdentity(l.identity);
         setFromProgram(l.fromProgram);
         setSignature(sigOf(l));
         setQuote(l.quote);
@@ -899,6 +909,7 @@ function Compose({
                 accounts={accounts}
                 menu={api.popupMenu}
                 from={from}
+                identity={identity}
                 onFrom={onFrom}
                 to={f.to}
                 cc={f.cc}

@@ -48,10 +48,40 @@ func (s *Service) stopDraftRuns(ctx context.Context, draftID int64) (release fun
 	})
 }
 
-// SetDraftAccount moves the draft to accountID: the body's signature becomes
-// that account's, attachments and the reply's source stay, and the revision
-// grows by one. revision must be the stored one (ErrStaleDraft).
+// SetDraftAccount moves the draft to accountID: it is sent as the
+// account's default 发件身份 (none: its own address), the body's signature
+// becomes that identity's or the account's, attachments and the reply's
+// source stay, and the revision grows by one. revision must be the stored
+// one (ErrStaleDraft).
 func (s *Service) SetDraftAccount(ctx context.Context, id, accountID, revision int64) (Draft, error) {
+	def, err := s.defaultIdentity(ctx, accountID)
+	if err != nil {
+		return Draft{}, err
+	}
+	var identityID int64
+	if def != nil {
+		identityID = def.ID
+	}
+	return s.setDraftFrom(ctx, id, accountID, identityID, revision)
+}
+
+// SetDraftFrom sends the draft from accountID as its identity identityID
+// (0: as the account's own address; ErrIdentityNotFound if it is not one
+// of the account's), as the compose window's From menu picks it (ADR
+// 0048). The body's signature becomes the identity's, or the account's
+// when the identity has none. The identity's Reply-To replaces the draft's
+// when the draft had none or the previous identity's; one the user typed
+// stays. Attachments and the reply's source stay, and the revision grows
+// by one. revision must be the stored one (ErrStaleDraft).
+func (s *Service) SetDraftFrom(ctx context.Context, id, accountID, identityID, revision int64) (Draft, error) {
+	if err := s.auditMCPDraft(ctx, "SetDraftFrom", id); err != nil {
+		return Draft{}, err
+	}
+	return s.setDraftFrom(ctx, id, accountID, identityID, revision)
+}
+
+// setDraftFrom is SetDraftFrom, unaudited.
+func (s *Service) setDraftFrom(ctx context.Context, id, accountID, identityID, revision int64) (Draft, error) {
 	s.sigMu.Lock() // the signature read stays the one stored, its images with it (NewDraft)
 	defer s.sigMu.Unlock()
 	acc, err := s.account(ctx, accountID)
@@ -63,6 +93,14 @@ func (s *Service) SetDraftAccount(ctx context.Context, id, accountID, revision i
 	}
 	if acc.ReceiveOnly {
 		return Draft{}, ErrReceiveOnly
+	}
+	var to *Identity
+	if identityID != 0 {
+		i, err := s.identity(ctx, identityID, accountID)
+		if err != nil {
+			return Draft{}, err
+		}
+		to = &i
 	}
 	s.editMu.Lock()
 	defer s.editMu.Unlock()
@@ -84,9 +122,21 @@ func (s *Service) SetDraftAccount(ctx context.Context, id, accountID, revision i
 	if err != nil {
 		return Draft{}, err
 	}
-	body := mail.SanitizeDraft(withSignature(d.HTML, acc, cids, st.SignatureDelimiter), cids)
-	r, err := s.db.Execute(ctx, `UPDATE drafts SET account_id = ?, body_html = ?, updated_at = ?, revision = revision + 1,
-		from_program = MAX(from_program, ?) WHERE id = ? AND revision = ?`, accountID, body, time.Now().Unix(), fromProgram(ctx), id, revision)
+	sig, err := s.signatureOf(ctx, acc, to)
+	if err != nil {
+		return Draft{}, err
+	}
+	replyTo := d.ReplyTo
+	if was := s.identityReplyTo(ctx, d.IdentityID); replyTo == "" || mail.AddrKey(replyTo) == mail.AddrKey(was) {
+		replyTo = ""
+		if to != nil {
+			replyTo = to.ReplyTo
+		}
+	}
+	body := mail.SanitizeDraft(withSignature(d.HTML, sig, cids, st.SignatureDelimiter), cids)
+	r, err := s.db.Execute(ctx, `UPDATE drafts SET account_id = ?, identity_id = ?, reply_to = ?, body_html = ?, updated_at = ?,
+		revision = revision + 1, from_program = MAX(from_program, ?) WHERE id = ? AND revision = ?`,
+		accountID, nullID(identityID), replyTo, body, time.Now().Unix(), fromProgram(ctx), id, revision)
 	if err != nil {
 		return Draft{}, err
 	}
@@ -96,6 +146,18 @@ func (s *Service) SetDraftAccount(ctx context.Context, id, accountID, revision i
 	s.programChanged(ctx, nil)
 	s.draftChanged(ctx, id)
 	return s.GetDraft(ctx, id)
+}
+
+// identityReplyTo is identity id's Reply-To, "" for none or no identity.
+func (s *Service) identityReplyTo(ctx context.Context, id int64) string {
+	if id == 0 {
+		return ""
+	}
+	i, err := s.identity(ctx, id, 0)
+	if err != nil {
+		return ""
+	}
+	return i.ReplyTo
 }
 
 // SendRevision is Send for exactly that revision of the draft: if the stored

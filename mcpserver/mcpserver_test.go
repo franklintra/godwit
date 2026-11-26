@@ -773,3 +773,50 @@ func TestMCPSearchContacts(t *testing.T) {
 	none := ok(t, cs, "search_contacts", map[string]any{"query": "nobody-matches-this"})
 	assert.Equal(t, "no contacts found", none)
 }
+
+// create_draft's from picks the address the draft is sent as: the
+// account's own or one of its identities; another is refused before any
+// draft is made.
+func TestMCPCreateDraftFrom(t *testing.T) {
+	e := coretest.New(t, coretest.WithoutAutoSync())
+	acc := e.AddAccount(t, "alice@example.com")
+	ctx := t.Context()
+	id, err := e.Svc.AddIdentity(ctx, acc.ID, core.IdentityInput{Name: "Belcova", Email: "contact@belcova.fr"})
+	require.NoError(t, err)
+	other, err := e.Svc.AddIdentity(ctx, acc.ID, core.IdentityInput{Name: "Franklin", Email: "contact@belcova.fr", IsDefault: true})
+	require.NoError(t, err)
+	cs, _ := bridge(t, e)
+	assert.Contains(t, ok(t, cs, "list_accounts", nil), `also sends as "Belcova" <contact@belcova.fr>`)
+
+	draftOf := func(text string) core.Draft {
+		t.Helper()
+		var n int64
+		_, err := fmt.Sscanf(text[strings.Index(text, "draft "):], "draft %d · account", &n)
+		require.NoError(t, err)
+		d, err := e.Svc.GetDraft(ctx, n)
+		require.NoError(t, err)
+		return d
+	}
+	args := func(from string) map[string]any {
+		a := map[string]any{"to": []string{"bob@example.com"}, "subject": "hello", "body": "hi"}
+		if from != "" {
+			a["from"] = from
+		}
+		return a
+	}
+	text := ok(t, cs, "create_draft", args("Belcova <contact@belcova.fr>"))
+	assert.Contains(t, text, `from "Belcova" <contact@belcova.fr>`)
+	assert.Equal(t, id.ID, draftOf(text).IdentityID)
+	assert.Equal(t, other.ID, draftOf(ok(t, cs, "create_draft", args("contact@belcova.fr"))).IdentityID, "the default of those with the address")
+	assert.Equal(t, other.ID, draftOf(ok(t, cs, "create_draft", args(""))).IdentityID, "left out: the account's default")
+	assert.Zero(t, draftOf(ok(t, cs, "create_draft", args("ALICE@example.com"))).IdentityID, "the account's own address")
+
+	before, err := e.Svc.ListDrafts(ctx, acc.ID)
+	require.NoError(t, err)
+	text, isErr := call(t, cs, "create_draft", args("someone@else.example"))
+	assert.True(t, isErr)
+	assert.Contains(t, text, "cannot send as")
+	after, err := e.Svc.ListDrafts(ctx, acc.ID)
+	require.NoError(t, err)
+	assert.Len(t, after, len(before), "no draft made")
+}

@@ -9,6 +9,7 @@ AddAccount
 AddAddressBook
 AddAttachment
 AddAttachmentAt
+AddIdentity
 AddLocalArchive
 AddMCPServer
 AddModelService
@@ -101,6 +102,7 @@ ListApprovals
 ListConversations
 ListDrafts
 ListFolders
+ListIdentities
 ListLabels
 ListMCPServers
 ListMessages
@@ -161,6 +163,7 @@ RemoveAccount
 RemoveAddressBook
 RemoveAttachment
 RemoveAttachmentAt
+RemoveIdentity
 RemoveMCPServer
 RemoveModelFiles
 RemoveModelService
@@ -206,6 +209,7 @@ SendRevision
 SetAddressBookCollectionEnabled
 SetConversationModel
 SetDraftAccount
+SetDraftFrom
 SetDraftModel
 SetFlags
 SetLabel
@@ -253,6 +257,7 @@ UnsubscribeMethod
 UntrustImageSender
 UpdateAccount
 UpdateAddressBookAuth
+UpdateIdentity
 UpdateLabel
 UpdateMCPServer
 UpdateModelService

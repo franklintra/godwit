@@ -264,7 +264,7 @@ func (p *ComposePage) Load(ctx context.Context) (ComposeState, error) {
 	if err != nil {
 		return ComposeState{}, err
 	}
-	out := ComposeState{SignatureHTML: sig, Wit: wit, DraftID: d.ID, Accounts: accs, From: d.AccountID, To: nz(d.To), Cc: nz(d.Cc), Bcc: nz(d.Bcc),
+	out := ComposeState{SignatureHTML: sig, Wit: wit, DraftID: d.ID, Accounts: accs, From: d.AccountID, Identity: d.IdentityID, To: nz(d.To), Cc: nz(d.Cc), Bcc: nz(d.Bcc),
 		ReplyTo: d.ReplyTo, Subject: d.Subject, Body: editable, Quote: mail.HTMLToText(s.quote),
 		Attachments: attachments(d), Headers: headers(d), ReadReceipt: d.ReadReceipt, Revision: d.Revision,
 		UpdatedAt: d.UpdatedAt.UnixMilli(), Theme: ThemeOf(st), Locale: i18n.Language(), FromProgram: d.FromProgram}
@@ -274,16 +274,27 @@ func (p *ComposePage) Load(ctx context.Context) (ComposeState, error) {
 	return out, nil
 }
 
-// senders are the accounts a draft can be sent from.
+// senders are the accounts a draft can be sent from, each with its
+// identities.
 func senders(ctx context.Context, svc Service) ([]Account, error) {
 	accs, err := svc.ListAccounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ids, err := svc.ListIdentities(ctx, 0)
 	if err != nil {
 		return nil, err
 	}
 	var out []Account
 	for _, a := range accs {
 		if a.Kind != core.KindLocalArchive && !a.ReceiveOnly { // no sender
-			out = append(out, Account{ID: a.ID, Email: a.Email})
+			acc := Account{ID: a.ID, Email: a.Email, Identities: []Identity{}}
+			for _, i := range ids {
+				if i.AccountID == a.ID {
+					acc.Identities = append(acc.Identities, Identity{ID: i.ID, Name: i.Name, Email: i.Email})
+				}
+			}
+			out = append(out, acc)
 		}
 	}
 	return out, nil
@@ -334,9 +345,9 @@ func (p *ComposePage) Save(ctx context.Context, e ComposeEdit) (SaveResult, erro
 	return SaveResult{Revision: d.Revision}, nil
 }
 
-// SetAccount moves the calling window's draft to account id, whose
-// signature replaces the old one; revision must be the stored one, else
-// Conflict.
+// SetAccount moves the calling window's draft to account id, sent as its
+// default identity, whose signature replaces the old one; revision must be
+// the stored one, else Conflict.
 func (p *ComposePage) SetAccount(ctx context.Context, id, revision int64) (Change, error) {
 	_, svc, s, err := p.open(ctx)
 	if err != nil {
@@ -352,6 +363,29 @@ func (p *ComposePage) SetAccount(ctx context.Context, id, revision int64) (Chang
 	}
 	s.adopt(d)
 	return changeOf(ctx, svc, d)
+}
+
+// SetFrom sends the calling window's draft from account as its identity
+// (0: the account's own address), as the From menu picks it: the
+// identity's signature (else the account's) replaces the old one, and its
+// Reply-To may replace the draft's (Change.ReplyTo). revision must be the
+// stored one, else Conflict.
+func (p *ComposePage) SetFrom(ctx context.Context, account, identity, revision int64) (FromChange, error) {
+	_, svc, s, err := p.open(ctx)
+	if err != nil {
+		return FromChange{}, err
+	}
+	defer s.mu.Unlock()
+	d, err := svc.SetDraftFrom(ctx, s.draftID, account, identity, revision)
+	if errors.Is(err, core.ErrStaleDraft) {
+		return FromChange{Change: conflict}, nil
+	}
+	if err != nil {
+		return FromChange{}, err
+	}
+	s.adopt(d)
+	ch, err := changeOf(ctx, svc, d)
+	return FromChange{Change: ch, ReplyTo: d.ReplyTo}, err
 }
 
 // AddAttachments asks for files in a dialog on the calling window and adds

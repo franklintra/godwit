@@ -4314,5 +4314,59 @@
   "reader_thread_expand_action": "Expand",
   "settings_rules_match_all": "Match all conditions",
   "settings_rules_match_any": "Match any condition",
-  "settings_rules_edit": "Edit"
+  "settings_rules_edit": "Edit",
+  "settings_identity": "Send as",
+  "settings_identity_foot": "Other names and addresses this account sends as. The server must allow each one (in Gmail: Settings › Accounts › Send mail as; in Microsoft 365: Send As permission), or it refuses the mail or rewrites the sender.",
+  "settings_identity_default": "Default for new mail",
+  "settings_identity_reply_to_row": "Reply-To {arg1}",
+  "@settings_identity_reply_to_row": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "settings_identity_signature_row": "Signature: {arg1}",
+  "@settings_identity_signature_row": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "settings_identity_edit": "Edit",
+  "settings_identity_remove": "Remove",
+  "settings_identity_remove_aria": "Remove {arg1}",
+  "@settings_identity_remove_aria": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "settings_identity_add_row": "Another address or name",
+  "settings_identity_add_help": "Pick it under From when you write",
+  "settings_identity_add": "Add",
+  "settings_identity_remove_title": "Remove {arg1}?",
+  "@settings_identity_remove_title": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "settings_identity_remove_help": "Drafts using it are sent from the account's own address. Mail already sent does not change.",
+  "settings_identity_add_title": "Add an address to send as",
+  "settings_identity_edit_title": "Edit address",
+  "settings_identity_help": "Replies go out from the address the message was sent to.",
+  "settings_identity_email": "Address",
+  "settings_identity_name": "Name",
+  "settings_identity_reply_to": "Reply-To",
+  "settings_identity_signature": "Signature",
+  "settings_identity_signature_account": "The account's signature",
+  "settings_identity_make_default": "Use for new mail",
+  "settings_identity_make_default_help": "New mail from this account starts from this address",
+  "error_identity_not_found": "This address is not one of the account's.",
+  "error_identity_exists": "The account already has this name and address.",
+  "error_identity_invalid": "Enter one email address, and a name on one line."
 }

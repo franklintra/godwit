@@ -24,6 +24,7 @@ const (
 	ImportProgress      = "import.progress"       // an .eml import into AccountID handled Done of Total files
 	AddressBooksChanged = "address_books.changed" // address books, collections, order or synced cards changed
 	DraftsChanged       = "drafts.changed"        // a program created or changed a draft (ADR 0043)
+	IdentitiesChanged   = "identities.changed"    // an account's 发件身份 were added, changed or removed (ADR 0048)
 	// DraftConflict: a server draft of AccountID changed both here and in
 	// another app, or another app removed it (ADR 0047); Kind says which:
 	// server_newer, local_newer or server_gone.

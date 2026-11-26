@@ -19,11 +19,16 @@ func AddrKey(s string) string {
 }
 
 // ReplyRecipients picks reply targets: Reply-To if set, else From. With all,
-// the original To/Cc are added to cc. self and duplicates are dropped.
-// A reply to the user's own mail (From is self, no other Reply-To) follows
-// up with its recipients instead: the original To, plus Cc with all.
-func ReplyRecipients(orig *Parsed, self string, all bool) (to, cc []string) {
-	seen := map[string]bool{AddrKey(self): true}
+// the original To/Cc are added to cc. self, the user's other addresses
+// (more: the account's 发件身份) and duplicates are dropped.
+// A reply to the user's own mail (From is one of them, no other Reply-To)
+// follows up with its recipients instead: the original To, plus Cc with all.
+func ReplyRecipients(orig *Parsed, self string, all bool, more ...string) (to, cc []string) {
+	selves := append([]string{self}, more...)
+	seen := map[string]bool{}
+	for _, a := range selves {
+		seen[AddrKey(a)] = true
+	}
 	add := func(dst *[]string, in ...string) {
 		for _, s := range in {
 			if s = strings.TrimSpace(s); s != "" && !seen[AddrKey(s)] {
@@ -32,7 +37,7 @@ func ReplyRecipients(orig *Parsed, self string, all bool) (to, cc []string) {
 			}
 		}
 	}
-	if FromSelf(orig.From, orig.ReplyTo, self) {
+	if FromSelf(orig.From, orig.ReplyTo, selves...) {
 		add(&to, orig.To...)
 		if all {
 			add(&cc, orig.Cc...)
@@ -52,10 +57,16 @@ func ReplyRecipients(orig *Parsed, self string, all bool) (to, cc []string) {
 }
 
 // FromSelf reports whether a mail from from (with Reply-To replyTo, "" for
-// none) is the user's own at self: a reply to it goes to its recipients.
-func FromSelf(from, replyTo, self string) bool {
-	key := AddrKey(self)
-	return key != "" && AddrKey(from) == key && (replyTo == "" || AddrKey(replyTo) == key)
+// none) is the user's own at one of the addresses self: a reply to it goes
+// to its recipients.
+func FromSelf(from, replyTo string, self ...string) bool {
+	keys := map[string]bool{}
+	for _, s := range self {
+		if k := AddrKey(s); k != "" {
+			keys[k] = true
+		}
+	}
+	return keys[AddrKey(from)] && (replyTo == "" || keys[AddrKey(replyTo)])
 }
 
 // QuoteHTML returns the "on {date}, {from} wrote:" line plus the original in a blockquote.

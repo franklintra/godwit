@@ -29,6 +29,10 @@ func (cl *Client) AddAttachmentAt(ctx context.Context, draftID int64, revision i
 	return call2[core.DraftAttachment, int64](cl, ctx, "AddAttachmentAt", draftID, revision, srcPath)
 }
 
+func (cl *Client) AddIdentity(ctx context.Context, accountID int64, in core.IdentityInput) (core.Identity, error) {
+	return call[core.Identity](cl, ctx, "AddIdentity", accountID, in)
+}
+
 func (cl *Client) AddLocalArchive(ctx context.Context, name string) (core.Account, error) {
 	return call[core.Account](cl, ctx, "AddLocalArchive", name)
 }
@@ -409,6 +413,10 @@ func (cl *Client) ListFolders(ctx context.Context, accountID int64) ([]core.Fold
 	return call[[]core.Folder](cl, ctx, "ListFolders", accountID)
 }
 
+func (cl *Client) ListIdentities(ctx context.Context, accountID int64) ([]core.Identity, error) {
+	return call[[]core.Identity](cl, ctx, "ListIdentities", accountID)
+}
+
 func (cl *Client) ListLabels(ctx context.Context) ([]core.Label, error) {
 	return call[[]core.Label](cl, ctx, "ListLabels")
 }
@@ -645,6 +653,10 @@ func (cl *Client) RemoveAttachmentAt(ctx context.Context, draftID int64, attachm
 	return call[int64](cl, ctx, "RemoveAttachmentAt", draftID, attachmentID, revision)
 }
 
+func (cl *Client) RemoveIdentity(ctx context.Context, id int64) error {
+	return callErr(cl, ctx, "RemoveIdentity", id)
+}
+
 func (cl *Client) RemoveMCPServer(ctx context.Context, id int64) error {
 	return callErr(cl, ctx, "RemoveMCPServer", id)
 }
@@ -803,6 +815,10 @@ func (cl *Client) SetConversationModel(ctx context.Context, id int64, ref string
 
 func (cl *Client) SetDraftAccount(ctx context.Context, id int64, accountID int64, revision int64) (core.Draft, error) {
 	return call[core.Draft](cl, ctx, "SetDraftAccount", id, accountID, revision)
+}
+
+func (cl *Client) SetDraftFrom(ctx context.Context, id int64, accountID int64, identityID int64, revision int64) (core.Draft, error) {
+	return call[core.Draft](cl, ctx, "SetDraftFrom", id, accountID, identityID, revision)
 }
 
 func (cl *Client) SetDraftModel(ctx context.Context, draftID int64, model string) error {
@@ -1015,6 +1031,10 @@ func (cl *Client) UpdateAccount(ctx context.Context, id int64, p core.AccountPat
 
 func (cl *Client) UpdateAddressBookAuth(ctx context.Context, id int64, password string, oauthFlowID string, client core.OAuthClient) (core.AddressBook, error) {
 	return call[core.AddressBook](cl, ctx, "UpdateAddressBookAuth", id, password, oauthFlowID, client)
+}
+
+func (cl *Client) UpdateIdentity(ctx context.Context, id int64, p core.IdentityPatch) (core.Identity, error) {
+	return call[core.Identity](cl, ctx, "UpdateIdentity", id, p)
 }
 
 func (cl *Client) UpdateLabel(ctx context.Context, id int64, in core.LabelInput) (core.Label, error) {

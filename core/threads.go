@@ -110,13 +110,17 @@ func (s *Service) fillThreads(ctx context.Context, items []ThreadSummary, only s
 		only = " AND " + only
 	}
 	ms, err := s.db.Query(ctx, `SELECT thread_id, from_addr, snippet, flags, has_attachments, auth_results, security_status, security_reason, security_scanned_at,
-		(SELECT email FROM accounts WHERE id = m.account_id),
+		m.account_id,
 		(SELECT COALESCE(NULLIF(role_override, ''), role, '') FROM folders WHERE id = `+shownFolder+`), `+shownFolders+` FROM messages m
 		WHERE thread_id IN (`+strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")+`) AND `+notPurgedCond+only+` ORDER BY date DESC, id DESC`, ids...)
 	if err != nil {
 		return err
 	}
 	sentIDs, err := s.roleFolderIDs(ctx, "sent")
+	if err != nil {
+		return err
+	}
+	mine, err := s.addressSets(ctx) // mail from the account's address or one of its identities' is the user's
 	if err != nil {
 		return err
 	}
@@ -152,7 +156,7 @@ func (s *Service) fillThreads(ctx context.Context, items []ThreadSummary, only s
 		if t.Count == 0 {
 			t.Snippet = gomail.Snippet(store.Str(r[2])) // newest first; clean of what an older sync kept
 		}
-		if role := store.Str(r[10]); t.From == "" && role != "sent" && role != "drafts" && gomail.AddrKey(fromAddr) != gomail.AddrKey(store.Str(r[9])) {
+		if role := store.Str(r[10]); t.From == "" && role != "sent" && role != "drafts" && !mine[store.Int(r[9])][gomail.AddrKey(fromAddr)] {
 			t.From = fromAddr
 		}
 		t.Count++
@@ -188,8 +192,12 @@ func (s *Service) GetThread(ctx context.Context, id int64) (Thread, error) {
 	if len(rows.Values) == 0 {
 		return Thread{}, fmt.Errorf("thread %d not found", id)
 	}
-	t, self := Thread{ID: id, Subject: store.Str(rows.Values[0][0])}, store.Str(rows.Values[0][1])
+	t := Thread{ID: id, Subject: store.Str(rows.Values[0][0])}
 	sentID, _, err := mailsync.RoleFolder(ctx, s.db, store.Int(rows.Values[0][2]), "sent")
+	if err != nil {
+		return Thread{}, err
+	}
+	selves, err := s.accountAddresses(ctx, store.Int(rows.Values[0][2])) // the account's and its identities'
 	if err != nil {
 		return Thread{}, err
 	}
@@ -206,7 +214,7 @@ func (s *Service) GetThread(ctx context.Context, id int64) (Thread, error) {
 		inReplyTo, refs, replyTo := store.Str(r[msgColCount]), store.Str(r[msgColCount+1]), store.Str(r[msgColCount+2])
 		// A forward as enqueue sends it. With its subject edited it counts as mail
 		// to answer: the compose window still shows who the reply goes to.
-		forward := inReplyTo == "" && refs != "" && gomail.IsForwardSubject(m.Subject) && gomail.FromSelf(m.From, replyTo, self)
+		forward := inReplyTo == "" && refs != "" && gomail.IsForwardSubject(m.Subject) && gomail.FromSelf(m.From, replyTo, selves...)
 		if !forward {
 			t.ReplyTarget = m.ID
 		}

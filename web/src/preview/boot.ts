@@ -60,7 +60,10 @@ const pages: Record<string, { states: string[]; entry: () => Promise<unknown>; s
       let followed = false;
       const body = () => (revision > 1 || withBody ? fx.compose(mode, true).body : "");
       const changed = (): BodyChange => {
-        const { accounts, from, quote, to, cc, bcc, replyTo, subject } = fx.compose(mode, true);
+        const { accounts, from, identity, quote, to, cc, bcc, replyTo, subject } = fx.compose(
+          mode,
+          true,
+        );
         return {
           revision,
           attachments: [],
@@ -72,6 +75,7 @@ const pages: Record<string, { states: string[]; entry: () => Promise<unknown>; s
           body: body(),
           accounts,
           from,
+          identity,
           quote,
           to,
           cc,

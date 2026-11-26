@@ -82,6 +82,25 @@ var ForkMigrations = []ForkMigration{{
 		`CREATE INDEX server_drafts_draft ON server_drafts(draft_id)`,
 		`CREATE INDEX server_drafts_account ON server_drafts(account_id, message_id_hdr)`,
 	},
+}, {
+	Name: "identities",
+	Stmts: []string{
+		// 发件身份 (ADR 0048): the other names and addresses an account sends as
+		// (a Gmail send-as address, a shared mailbox, a second name on the same
+		// address). signature_id NULL writes with the account's signature;
+		// is_default marks the one new mail starts from, none the account's own.
+		// A draft's identity_id NULL sends as the account itself.
+		`CREATE TABLE identities (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+			name TEXT NOT NULL DEFAULT '',
+			email TEXT NOT NULL,
+			reply_to TEXT NOT NULL DEFAULT '',
+			signature_id INTEGER REFERENCES signatures(id) ON DELETE SET NULL,
+			is_default INTEGER NOT NULL DEFAULT 0,
+			UNIQUE(account_id, email, name))`,
+		`ALTER TABLE drafts ADD COLUMN identity_id INTEGER REFERENCES identities(id) ON DELETE SET NULL`,
+	},
 }}
 
 // schemaObject is what an additive statement creates.

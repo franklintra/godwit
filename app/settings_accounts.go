@@ -550,6 +550,7 @@ func (p *settingsPage) accountView(c *ui.Context, acc core.Account) {
 		return
 	}
 	p.accountSignatureView(c, acc)
+	p.identitiesSection(c, acc)
 	// The text area is the section's body, with no card around it, as macOS shows a long text.
 	ui.Column(c).Gap(theme.SectionGap).Children(func() {
 		sectionTitle(c, i18n.T("settings.account.ai"))
@@ -1159,6 +1160,8 @@ func (p *settingsPage) dialogView(c *ui.Context) {
 				}
 			})
 		}
+	case "identity", "identity_remove":
+		title, desc, label, opts, body, confirm, incomplete = p.identityDialog(c, acc)
 	case "cache":
 		title = i18n.T("settings.account.clear_cache.title")
 		desc = i18n.T("settings.account.clear_cache.body")
@@ -1228,7 +1231,7 @@ func (p *settingsPage) dialogView(c *ui.Context) {
 			kit.Alert(c, kit.ToneDanger, humanize(p.dlgErr), nil)
 		}
 	}
-	confirmOnly := p.dialog == "remove" || p.dialog == "cache" // a question to answer, not a form to close
+	confirmOnly := p.dialog == "remove" || p.dialog == "cache" || p.dialog == "identity_remove" // a question to answer, not a form to close
 	kit.Dialog(c, &p.open, title, kit.DialogOpts{Size: size, Desc: desc, Close: i18n.T("common.close"), Alert: confirmOnly}, content, func() {
 		kit.Button(c, i18n.T("common.cancel"), kit.ButtonOpts{Variant: kit.Outline}).OnClick(p.closeDialog)
 		opts.Disabled = p.busy || incomplete

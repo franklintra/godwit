@@ -92,7 +92,7 @@ func TestComposeLoadOwnDraft(t *testing.T) {
 	st, err := f.page.Load(f.ctx(1))
 	require.NoError(t, err)
 	assert.Equal(t, d.ID, st.DraftID)
-	assert.Equal(t, []Account{{f.acc.ID, "alice@example.com"}}, st.Accounts)
+	assert.Equal(t, []Account{{f.acc.ID, "alice@example.com", []Identity{}}}, st.Accounts)
 	assert.Equal(t, f.acc.ID, st.From)
 	assert.Equal(t, d.Revision, st.Revision)
 	assert.Equal(t, d.UpdatedAt.UnixMilli(), st.UpdatedAt)
@@ -308,7 +308,7 @@ func TestComposeBoundSurface(t *testing.T) {
 	sort.Strings(names)
 	assert.Equal(t, []string{"AddAttachments", "Answer", "Ask", "CheckCited", "Closed", "Decide", "DecideAll", "DecideWithArgs", "Finish", "Follow", "Latest", "Load",
 		"Models", "OpenCited", "OpenLink", "OpenModels", "PopupMenu", "RemoveAttachment", "Review", "Rewrite", "Save", "SearchContacts", "SearchMail", "Send", "SendLater", "SetAccount",
-		"SetModel", "Skill", "Stop", "TitleBar", "Toast", "ToastBar", "Undo", "WitInfo"}, names)
+		"SetFrom", "SetModel", "Skill", "Stop", "TitleBar", "Toast", "ToastBar", "Undo", "WitInfo"}, names)
 }
 
 func ptr[T any](v T) *T { return &v }
@@ -415,6 +415,49 @@ func TestComposeSetAccountKeepsBody(t *testing.T) {
 	require.NoError(t, err)
 	_, _, sig := splitOf(f.stored(t, d.ID).HTML)
 	assert.Contains(t, sig, "Bob")
+}
+
+// The From menu lists each account's identities; picking one sends as it,
+// with its signature and Reply-To, and the account's own address undoes it.
+func TestComposeSetFrom(t *testing.T) {
+	f := newFixture(t)
+	ctx := t.Context()
+	sig, err := f.e.Svc.CreateSignature(ctx, "Belcova")
+	require.NoError(t, err)
+	_, err = f.e.Svc.UpdateSignature(ctx, sig.ID, core.SignaturePatch{HTML: ptr("Belcova SAS")})
+	require.NoError(t, err)
+	id, err := f.e.Svc.AddIdentity(ctx, f.acc.ID, core.IdentityInput{Name: "Belcova", Email: "contact@belcova.fr", ReplyTo: "team@belcova.fr", SignatureID: sig.ID})
+	require.NoError(t, err)
+	d := f.draft(t, "new", 0)
+	f.c.Attach(1, d.ID)
+	st, err := f.page.Load(f.ctx(1))
+	require.NoError(t, err)
+	assert.Equal(t, []Identity{{ID: id.ID, Name: "Belcova", Email: "contact@belcova.fr"}}, st.Accounts[0].Identities)
+	assert.Zero(t, st.Identity)
+
+	ch, err := f.page.SetFrom(f.ctx(1), f.acc.ID, id.ID, st.Revision)
+	require.NoError(t, err)
+	assert.False(t, ch.Conflict)
+	assert.Contains(t, ch.SignatureHTML, "Belcova SAS")
+	assert.Contains(t, ch.ReplyTo, "team@belcova.fr")
+	st, err = f.page.Load(f.ctx(1))
+	require.NoError(t, err)
+	assert.Equal(t, id.ID, st.Identity)
+	// The next save keeps the identity's signature.
+	_, err = f.page.Save(f.ctx(1), ComposeEdit{Body: "<p>B</p>", ReplyTo: ch.ReplyTo, Revision: ch.Revision})
+	require.NoError(t, err)
+	stored := f.stored(t, d.ID)
+	_, _, s := splitOf(stored.HTML)
+	assert.Contains(t, s, "Belcova SAS")
+	assert.Equal(t, id.ID, stored.IdentityID)
+
+	ch, err = f.page.SetFrom(f.ctx(1), f.acc.ID, 0, stored.Revision)
+	require.NoError(t, err)
+	assert.NotContains(t, ch.SignatureHTML, "Belcova SAS")
+	assert.Empty(t, ch.ReplyTo, "the identity's Reply-To goes with it")
+	ch, err = f.page.SetFrom(f.ctx(1), f.acc.ID, id.ID, stored.Revision)
+	require.NoError(t, err)
+	assert.True(t, ch.Conflict)
 }
 
 func TestComposeSetAccountStale(t *testing.T) {
