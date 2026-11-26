@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/godwit-email/godwit/internal/perftrace"
 )
 
 // File names under the data directory.
@@ -394,6 +396,7 @@ func (s *Server) hello(ctx context.Context, c *conn, done chan struct{}, params 
 			ctx = w
 		}
 	}
+	ctx = perftrace.WithClient(ctx, client)
 	allow := func(method string, params []json.RawMessage) error {
 		if !roleOK(method, params) {
 			return ErrForbidden

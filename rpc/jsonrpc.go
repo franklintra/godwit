@@ -21,6 +21,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/godwit-email/godwit/internal/perftrace"
 )
 
 // WireError is a JSON-RPC error object.
@@ -312,7 +314,7 @@ func (c *conn) handle(line []byte) bool {
 		c.replyError(m.ID, &WireError{Code: CodeTooMany, Message: "too many requests", Data: &WireErrorData{Code: "too_many_requests"}})
 		return true
 	}
-	ctx, cancel := context.WithCancel(c.callCtx)
+	ctx, cancel := context.WithCancel(perftrace.WithRPC(c.callCtx, m.Method))
 	c.requests[id] = cancel
 	c.active++
 	c.mu.Unlock()
