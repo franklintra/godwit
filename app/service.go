@@ -62,6 +62,7 @@ type Service interface {
 	ExportAccountsFile(ctx context.Context) (string, error)
 	FetchAttachments(ctx context.Context, attachmentIDs []int64, fn func(path string, info core.AttachmentInfo) error) (err error)
 	Find(ctx context.Context, q core.FindQuery) (core.FindResult, error)
+	FindMessagesByMessageID(ctx context.Context, messageID string) ([]core.MessageRef, error)
 	FirstTimeRecipients(ctx context.Context, addrs []string) ([]string, error)
 	GetDraft(ctx context.Context, id int64) (core.Draft, error)
 	GetMessage(ctx context.Context, id int64, loadRemoteImages bool) (core.Message, error)

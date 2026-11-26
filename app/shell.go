@@ -139,8 +139,8 @@ func (a *App) onEvent(ev events.Event) {
 	case events.NotificationClicked: // the backend's notification
 		a.NotificationClicked(ev.Notification)
 		return
-	case events.OpenRequested: // the backend's tray
-		a.Open(OpenWindow)
+	case events.OpenRequested: // the backend's tray, a program's OpenDraft, a link the system handed the backend
+		a.Open(cmp.Or(ev.Open, OpenWindow))
 		return
 	case events.ComposeRequested: // the backend's tray
 		a.Open(OpenCompose)

@@ -45,10 +45,16 @@ var tools = []tool{
 		`{"type":"object","properties":{"account_id":{"type":"integer","minimum":1}},"required":["account_id"],"additionalProperties":false}`, listDrafts},
 	{"get_draft", "Get a draft: recipients, subject, its editable body, the quoted mail and the signature, and its revision (update_draft needs it).", true,
 		draftArgs, getDraft},
-	{"create_draft", "Create a draft for the user to review and send; it is not sent. For a reply give reply_to_message_id (and reply_all to answer everyone): the draft is in that message's account, addressed and quoted for you, and to, cc and subject override only if given. A new draft needs to and subject and uses account_id or the default account. from picks the address the draft is sent as: the account's own or one of its identities from list_accounts (a name and address, or just the address); left out, a reply goes from the address the message was sent to and a new draft from the account's default. body is plain text. bcc adds blind-copy recipients and reply_to sets the address replies go to; request_read_receipt asks the recipients for a read receipt, sent back to the draft's From address. headers adds header fields the sent message carries (to tag it, so a reply can be matched to it later). The user sees all of these before sending.", false,
-		`{"type":"object","properties":{"to":{"type":"array","items":{"type":"string"}},"cc":{"type":"array","items":{"type":"string"}},"subject":{"type":"string"},"body":{"type":"string"},"account_id":{"type":"integer","minimum":1},"from":{"type":"string","minLength":1},"reply_to_message_id":{"type":"integer","minimum":1},"reply_all":{"type":"boolean"},` + extraArgs + `},"required":["body"],"additionalProperties":false}`, createDraft},
+	{"find_message_by_message_id", "Find a message by its RFC 5322 Message-ID header (with or without the angle brackets), in every account: each match's message, thread, folder and account ID. The same message is listed once per account that has it.", true,
+		`{"type":"object","properties":{"rfc822_message_id":{"type":"string","minLength":1}},"required":["rfc822_message_id"],"additionalProperties":false}`, findByMessageID},
+	{"create_draft", "Create a draft for the user to review and send; it is not sent. For a reply give reply_to_message_id, or the replied message's Message-ID header as reply_to_rfc822_message_id (and reply_all to answer everyone): the draft is in that message's account, addressed and quoted for you, and to, cc and subject override only if given. A new draft needs to and subject and uses account_id or the default account. from picks the address the draft is sent as: the account's own or one of its identities from list_accounts (a name and address, or just the address); left out, a reply goes from the address the message was sent to and a new draft from the account's default. body is plain text. bcc adds blind-copy recipients and reply_to sets the address replies go to; request_read_receipt asks the recipients for a read receipt, sent back to the draft's From address. headers adds header fields the sent message carries (to tag it, so a reply can be matched to it later). The user sees all of these before sending. open: true also opens the draft in a Godwit compose window on the user's screen, for the user to review and send.", false,
+		`{"type":"object","properties":{"to":{"type":"array","items":{"type":"string"}},"cc":{"type":"array","items":{"type":"string"}},"subject":{"type":"string"},"body":{"type":"string"},"account_id":{"type":"integer","minimum":1},"from":{"type":"string","minLength":1},"reply_to_message_id":{"type":"integer","minimum":1},"reply_to_rfc822_message_id":{"type":"string","minLength":1},"reply_all":{"type":"boolean"},"open":{"type":"boolean"},` + extraArgs + `},"required":["body"],"additionalProperties":false}`, createDraft},
 	{"update_draft", "Change a draft's subject, to, cc, bcc, reply_to (\"\" removes it), request_read_receipt, plain-text body or headers (which replace all of its header fields; {} removes them); fields left out stay as they are, and the quote and signature are kept. revision is the draft's from get_draft: if the draft changed since, nothing is saved; read it again.", false,
 		`{"type":"object","properties":{"draft_id":{"type":"integer","minimum":1},"revision":{"type":"integer","minimum":1},"subject":{"type":"string"},"to":{"type":"array","items":{"type":"string"}},"cc":{"type":"array","items":{"type":"string"}},"body":{"type":"string"},` + extraArgs + `},"required":["draft_id","revision"],"additionalProperties":false}`, updateDraft},
+	{"open_draft", "Open a draft in a Godwit compose window on the user's screen and bring Godwit to the front, for the user to review, edit and send it themselves. It sends nothing and returns nothing of the draft (use get_draft). Call it only when the user wants to see or finish the draft in Godwit.", false,
+		draftArgs, openDraft},
+	{"open_message", "Open a message in Godwit's main window on the user's screen (its conversation, in the folder it shows in) and bring Godwit to the front. It returns nothing of the message (use get_message). Call it only when the user wants to see the message in Godwit.", false,
+		`{"type":"object","properties":{"message_id":{"type":"integer","minimum":1}},"required":["message_id"],"additionalProperties":false}`, openMessage},
 	{"send_draft", "Ask Godwit to send a draft as it is at revision (from get_draft). The user's Send through MCP setting decides: off fails; confirm (the default) returns at once while Godwit asks the user, who may decline; direct queues it in the outbox. If the draft changed since revision, nothing is sent; read it again.", false,
 		`{"type":"object","properties":{"draft_id":{"type":"integer","minimum":1},"revision":{"type":"integer","minimum":1}},"required":["draft_id","revision"],"additionalProperties":false}`, sendDraft},
 	{"set_reply_deadline", "Sets or clears the date by which the sender wants your reply to a conversation that is waiting on you. Needs the message that asks for it; a quote must appear word for word in that message. Stored only on this device and shown with its source; it reorders the user's views and never sends, moves or changes mail. It cannot replace or clear a date the user set.", false,
@@ -561,13 +567,25 @@ func resolveFrom(ctx context.Context, c *rpc.Client, account int64, from string)
 func createDraft(ctx context.Context, c *rpc.Client, args json.RawMessage) (string, error) {
 	var a struct {
 		edit
-		AccountID int64  `json:"account_id"`
-		From      string `json:"from"`
-		ReplyTo   int64  `json:"reply_to_message_id"`
-		ReplyAll  bool   `json:"reply_all"`
+		AccountID     int64  `json:"account_id"`
+		From          string `json:"from"`
+		ReplyTo       int64  `json:"reply_to_message_id"`
+		ReplyToRFC822 string `json:"reply_to_rfc822_message_id"`
+		ReplyAll      bool   `json:"reply_all"`
+		Open          bool   `json:"open"`
 	}
 	if err := decode(args, &a); err != nil {
 		return "", err
+	}
+	if a.ReplyToRFC822 != "" {
+		if a.ReplyTo != 0 {
+			return "", errors.New("give one of reply_to_message_id and reply_to_rfc822_message_id")
+		}
+		id, err := replyTarget(ctx, c, a.ReplyToRFC822, a.AccountID)
+		if err != nil {
+			return "", err
+		}
+		a.ReplyTo = id
 	}
 	mode, account := "new", a.AccountID
 	switch {
@@ -585,7 +603,7 @@ func createDraft(ctx context.Context, c *rpc.Client, args json.RawMessage) (stri
 		}
 		account = src.AccountID
 	case a.ReplyAll:
-		return "", errors.New("reply_all needs reply_to_message_id")
+		return "", errors.New("reply_all needs reply_to_message_id or reply_to_rfc822_message_id")
 	case a.To == nil || a.Subject == nil:
 		return "", errors.New("a new draft needs to and subject")
 	case account == 0:
@@ -625,7 +643,95 @@ func createDraft(ctx context.Context, c *rpc.Client, args json.RawMessage) (stri
 			return "", err
 		}
 	}
-	return save(ctx, c, d.ID, 0, a.edit)
+	text, err := save(ctx, c, d.ID, 0, a.edit)
+	if err != nil || !a.Open {
+		return text, err
+	}
+	if err := c.Call(ctx, "OpenDraft", nil, d.ID); err != nil {
+		return text + "not opened in Godwit: " + message(err) + "\n", nil // the draft is saved all the same
+	}
+	return text + "opened in a Godwit compose window for the user\n", nil
+}
+
+// replyTarget is the message a reply by Message-ID answers: the one match,
+// or account's when the message is in several accounts.
+func replyTarget(ctx context.Context, c *rpc.Client, rfc822ID string, account int64) (int64, error) {
+	var refs []core.MessageRef
+	if err := c.Call(ctx, "FindMessagesByMessageID", &refs, rfc822ID); err != nil {
+		return 0, err
+	}
+	if account != 0 {
+		refs = slices.DeleteFunc(refs, func(r core.MessageRef) bool { return r.AccountID != account })
+	}
+	switch {
+	case len(refs) == 0 && account != 0:
+		return 0, fmt.Errorf("no message with that Message-ID in account %d", account)
+	case len(refs) == 0:
+		return 0, errors.New("no message with that Message-ID; find_message_by_message_id finds one, search finds others")
+	}
+	accounts := map[int64]bool{}
+	for _, r := range refs {
+		accounts[r.AccountID] = true
+	}
+	if len(accounts) > 1 {
+		ids := slices.Sorted(maps.Keys(accounts))
+		return 0, fmt.Errorf("the message is in accounts %s; give account_id to reply from one", joinIDs(ids))
+	}
+	return refs[0].ID, nil // newest first: a twin in the same account is the same mail
+}
+
+func joinIDs(ids []int64) string {
+	s := make([]string, len(ids))
+	for i, id := range ids {
+		s[i] = strconv.FormatInt(id, 10)
+	}
+	return strings.Join(s, ", ")
+}
+
+func findByMessageID(ctx context.Context, c *rpc.Client, args json.RawMessage) (string, error) {
+	var a struct {
+		MessageID string `json:"rfc822_message_id"`
+	}
+	if err := decode(args, &a); err != nil {
+		return "", err
+	}
+	var refs []core.MessageRef
+	if err := c.Call(ctx, "FindMessagesByMessageID", &refs, a.MessageID); err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	for _, r := range refs {
+		fmt.Fprintf(&b, "account %d\n", r.AccountID)
+		summary(&b, r.MessageSummary)
+		b.WriteByte('\n')
+	}
+	return orNone(b.String(), "no message with that Message-ID"), nil
+}
+
+func openDraft(ctx context.Context, c *rpc.Client, args json.RawMessage) (string, error) {
+	var a struct {
+		DraftID int64 `json:"draft_id"`
+	}
+	if err := decode(args, &a); err != nil {
+		return "", err
+	}
+	if err := c.Call(ctx, "OpenDraft", nil, a.DraftID); err != nil {
+		return "", err
+	}
+	return "opened in a Godwit compose window for the user; it is not sent", nil
+}
+
+func openMessage(ctx context.Context, c *rpc.Client, args json.RawMessage) (string, error) {
+	var a struct {
+		MessageID int64 `json:"message_id"`
+	}
+	if err := decode(args, &a); err != nil {
+		return "", err
+	}
+	if err := c.Call(ctx, "OpenMessage", nil, a.MessageID); err != nil {
+		return "", err
+	}
+	return "opened in Godwit's window for the user", nil
 }
 
 func updateDraft(ctx context.Context, c *rpc.Client, args json.RawMessage) (string, error) {

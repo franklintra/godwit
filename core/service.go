@@ -119,6 +119,11 @@ type Options struct {
 	// TrayShown reports whether the backend's tray shows Godwit's icon; nil:
 	// it has none (no graphical session).
 	TrayShown func() bool
+	// ShowUI opens what (an OpenTarget) in Godwit's interface for OpenDraft
+	// and OpenMessage: a connected interface is asked on its events, else
+	// the backend starts one. nil: the backend can show no window (no
+	// desktop session), and those return ErrNoWindow.
+	ShowUI func(what string) error
 	// StopUIBackend shuts this backend down through its usual close path; set
 	// when the interface started it (ADR 0038). nil: the user started it, and
 	// the ui role's StopUIBackend is refused.

@@ -117,6 +117,7 @@ type config struct {
 	model            mask.Recognizer
 	recognitionModel []string
 	imap             []testmail.Option
+	showUI           func(what string) error
 }
 
 // WithRecognitionModelSources has the Service download 识别模型's files from urls
@@ -141,6 +142,11 @@ func WithConfirmWindow() Option { return func(c *config) { c.confirm = true } }
 // WithMCPSendNotify is the backend's Service: with no ui client connected, a
 // 每次确认 request posts a notification (core.Options.NotifyMCPSend) and waits.
 func WithMCPSendNotify() Option { return func(c *config) { c.notifyMCP = true } }
+
+// WithShowUI is a backend that can show Godwit's window: OpenDraft and
+// OpenMessage hand what to open to show (core.Options.ShowUI). Without it
+// they fail with core.ErrNoWindow, as a backend with no desktop session.
+func WithShowUI(show func(what string) error) Option { return func(c *config) { c.showUI = show } }
 
 // WithUnsubscribeClient sends one-click unsubscribes with c, as one reaching an httptest server.
 func WithUnsubscribeClient(c *http.Client) Option { return func(cfg *config) { cfg.unsub = c } }
@@ -199,7 +205,7 @@ func New(t testing.TB, opts ...Option) *Env {
 	if cfg.notifyMCP {
 		notifyMCP = func(int64) bool { return true }
 	}
-	svc, err := core.New(context.Background(), core.Options{NotifyMCPSend: notifyMCP, EWSNet: ewsNet, DataDir: dir, AutoSync: cfg.autoSync, SystemLanguage: "zh-CN", ImageClient: imageClient,
+	svc, err := core.New(context.Background(), core.Options{NotifyMCPSend: notifyMCP, ShowUI: cfg.showUI, EWSNet: ewsNet, DataDir: dir, AutoSync: cfg.autoSync, SystemLanguage: "zh-CN", ImageClient: imageClient,
 		Registry: cfg.registry, AppVersion: "1.2.0", SystemTranslator: cfg.sys, UnsubscribeClient: cfg.unsub, Recognizer: cfg.model,
 		RecognitionModelSources: cfg.recognitionModel, RecognitionModelClient: &http.Client{Transport: imageClient.Transport}})
 	if err != nil {

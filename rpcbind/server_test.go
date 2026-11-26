@@ -74,8 +74,8 @@ func cacheFiles(dataDir string) int {
 
 // The mcp role's whole surface, compared with every method of *core.Service.
 func TestMCPAllowlistContents(t *testing.T) {
-	want := []string{"GetDraft", "GetMessageText", "GetThread", "ListAccounts", "ListDrafts", "ListFolders",
-		"ListIdentities", "ListMessages", "ListThreads", "NewDraft", "RequestMCPSend", "SaveDraft", "SavedViews", "Search", "SearchContacts",
+	want := []string{"FindMessagesByMessageID", "GetDraft", "GetMessageText", "GetThread", "ListAccounts", "ListDrafts", "ListFolders",
+		"ListIdentities", "ListMessages", "ListThreads", "NewDraft", "OpenDraft", "OpenMessage", "RequestMCPSend", "SaveDraft", "SavedViews", "Search", "SearchContacts",
 		"SetDraftFrom", "SetThreadDeadline", "ViewContents", "ViewGroupPage"}
 	newMode := []json.RawMessage{json.RawMessage(`1`), json.RawMessage(`"new"`), json.RawMessage(`0`)}
 	var got []string
@@ -332,6 +332,51 @@ func TestSetThreadDeadlineOverLocalAPI(t *testing.T) {
 	assert.Equal(t, "deadline_outranked", we.Data.Code)
 	assert.Equal(t, core.ErrDeadlineOutranked.Error(), we.Message)
 	assert.Empty(t, auditRows(t, e.DataDir))
+}
+
+// A program finds a message by its Message-ID and puts a draft or the
+// message on the user's screen: Godwit is asked to show it (ShowUI), and
+// nothing is sent or audited, as nothing leaves the machine.
+func TestOpenAndFindOverLocalAPI(t *testing.T) {
+	shown := make(chan string, 4)
+	e := coretest.New(t, coretest.WithoutAutoSync(), coretest.WithShowUI(func(what string) error {
+		shown <- what
+		return nil
+	}))
+	ctx := t.Context()
+	acc := e.AddAccount(t, "alice@example.com")
+	e.Deliver(t, acc.ID, "INBOX", coretest.Msg("bob@example.com", "alice@example.com", "Lunch", "Tuesday?", coretest.MessageID("lunch@example.com")))
+	dir := listen(t, e.Svc)
+	full, mcp := dial(t, dir, rpc.RoleFull), dial(t, dir, rpc.RoleMCP)
+
+	var refs []core.MessageRef
+	require.NoError(t, full.Call(ctx, "FindMessagesByMessageID", &refs, "<lunch@example.com>"))
+	require.Len(t, refs, 1)
+	assert.Equal(t, acc.ID, refs[0].AccountID)
+	assert.Equal(t, "lunch@example.com", refs[0].MessageID)
+	assert.NotZero(t, refs[0].ThreadID)
+	assert.NotZero(t, refs[0].FolderID)
+	var d core.Draft
+	require.NoError(t, full.Call(ctx, "NewDraft", &d, acc.ID, "reply", refs[0].ID))
+	require.NoError(t, full.Call(ctx, "OpenDraft", nil, d.ID))
+	assert.Equal(t, "draft:"+strconv.FormatInt(d.ID, 10), <-shown)
+	require.NoError(t, mcp.Call(ctx, "OpenMessage", nil, refs[0].ID))
+	assert.Equal(t, "message:"+strconv.FormatInt(refs[0].ID, 10), <-shown)
+	assert.Error(t, full.Call(ctx, "OpenDraft", nil, d.ID+100))
+	assert.Empty(t, shown, "nothing shown for a draft that does not exist")
+	assert.Empty(t, auditRows(t, e.DataDir))
+	assert.Empty(t, e.Sent(acc.ID))
+}
+
+// A backend with no desktop session says so.
+func TestOpenDraftNoWindow(t *testing.T) {
+	e := coretest.New(t, coretest.WithoutAutoSync())
+	acc := e.AddAccount(t, "alice@example.com")
+	d, err := e.Svc.NewDraft(t.Context(), acc.ID, "new", 0)
+	require.NoError(t, err)
+	var we *rpc.WireError
+	require.ErrorAs(t, dial(t, listen(t, e.Svc), rpc.RoleFull).Call(t.Context(), "OpenDraft", nil, d.ID), &we)
+	assert.Equal(t, "no_window", we.Data.Code)
 }
 
 // SendRevision sends as Send does, so it is audited as Send is.

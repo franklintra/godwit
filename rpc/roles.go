@@ -25,10 +25,14 @@ const (
 // SetThreadDeadline sets or clears one conversation's 期限 on this device
 // only, as the program source: it sends nothing, changes no mail, and cannot
 // replace or clear one the user set (core checks the message it cites).
+// FindMessagesByMessageID is a read of stored data. OpenDraft and OpenMessage
+// put a draft or a message the user already has on the user's screen in
+// Godwit (starting its window if none is open) for the user to review: they
+// return nothing of it, and send or change nothing.
 var mcpMethods = map[string]bool{
 	"ListAccounts": true, "ListFolders": true, "ListThreads": true, "GetThread": true,
-	"ListMessages": true, "GetMessageText": true, "Search": true, "SearchContacts": true,
-	"ListDrafts": true, "GetDraft": true, "NewDraft": true, "SaveDraft": true,
+	"ListMessages": true, "GetMessageText": true, "Search": true, "SearchContacts": true, "FindMessagesByMessageID": true,
+	"ListDrafts": true, "GetDraft": true, "NewDraft": true, "SaveDraft": true, "OpenDraft": true, "OpenMessage": true,
 	"ListIdentities": true, "SetDraftFrom": true,
 	"SavedViews": true, "ViewContents": true, "ViewGroupPage": true,
 	"RequestMCPSend": true, "SetThreadDeadline": true,

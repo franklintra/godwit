@@ -2,15 +2,19 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"github.com/godwit-email/godwit/internal/theme"
 	"image/png"
+	"reflect"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/godwit-email/godwit/app"
 	"github.com/godwit-email/godwit/core"
+	"github.com/godwit-email/godwit/core/events"
 )
 
 func TestBackendOnlyAtLogin(t *testing.T) {
@@ -285,6 +289,11 @@ func TestOpenArg(t *testing.T) {
 		{[]string{"--open=compose"}, app.OpenCompose},
 		{[]string{"-open", "account:2"}, "account:2"},
 		{[]string{"--open"}, app.OpenWindow},
+		{[]string{"--data-dir", "/d", "--open=godwit://draft/4"}, "godwit://draft/4"},
+		{[]string{"mailto:bob@example.com"}, "mailto:bob@example.com"}, // Windows and Linux start the link's handler so
+		{[]string{"--data-dir", "/d", "godwit://message/3"}, "godwit://message/3"},
+		{[]string{"godwit://message/3", "--open", "compose"}, app.OpenCompose},
+		{[]string{"https://example.com"}, app.OpenWindow},
 	} {
 		if got := openArg(tc.args); got != tc.want {
 			t.Errorf("openArg(%q) = %q, want %q", tc.args, got, tc.want)
@@ -337,5 +346,49 @@ func checkTrayIcon(t *testing.T, box trayBox) {
 	}
 	if top, bot := y0, trayH-1-y1; top-bot < -2 || top-bot > 2 {
 		t.Errorf("mark off centre down: %d px above, %d below", top, bot)
+	}
+}
+
+// What showUI asks a connected interface for.
+func TestOpenEvent(t *testing.T) {
+	for what, want := range map[string]events.Event{
+		app.OpenWindow:     {Type: events.OpenRequested},
+		app.OpenCompose:    {Type: events.ComposeRequested},
+		"draft:3":          {Type: events.OpenRequested, Open: "draft:3"},
+		"mailto:a@example": {Type: events.OpenRequested, Open: "mailto:a@example"},
+		"godwit://draft/3": {Type: events.OpenRequested, Open: "godwit://draft/3"},
+		"message:3":        {Type: events.NotificationClicked, Notification: "message:3"},
+		"mcp_send:1":       {Type: events.NotificationClicked, Notification: "mcp_send:1"},
+	} {
+		if got := openEvent(what); !reflect.DeepEqual(got, want) {
+			t.Errorf("openEvent(%q) = %+v, want %+v", what, got, want)
+		}
+	}
+}
+
+// godwit open hands its target to an interface it starts (uiCmd), which
+// passes it on to the running one; a target Godwit does not open is a usage
+// error.
+func TestOpenCmd(t *testing.T) {
+	l := launchesUIs(t)
+	dir := shortDir(t)
+	var stdout, stderr bytes.Buffer
+	for _, target := range []string{"draft:4", "mailto:bob@example.com?subject=Hi"} {
+		if code := run(context.Background(), []string{"open", "--data-dir", dir, target}, nil, &stdout, &stderr); code != 0 {
+			t.Fatalf("godwit open %s: exit %d: %s", target, code, stderr.String())
+		}
+	}
+	want := [][]string{{"--data-dir", dir, "--open=draft:4"}, {"--data-dir", dir, "--open=mailto:bob@example.com?subject=Hi"}}
+	if got := l.all(); !slices.EqualFunc(got, want, slices.Equal) {
+		t.Fatalf("interfaces started with %q, want %q", got, want)
+	}
+	for _, args := range [][]string{{"open"}, {"open", "https://example.com"}, {"open", "draft:x"}, {"open", "draft:1", "draft:2"}} {
+		stderr.Reset()
+		if code := run(context.Background(), args, nil, &stdout, &stderr); code != 2 {
+			t.Errorf("%q: exit %d, want 2", args, code)
+		}
+	}
+	if n := len(l.all()); n != 2 {
+		t.Fatalf("%d interfaces started for bad targets", n-2)
 	}
 }

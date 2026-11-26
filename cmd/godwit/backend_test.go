@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -474,9 +475,9 @@ func TestBackendShowsUI(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 	}
 	want := [][]string{
-		{"--data-dir", dir, "--open", app.OpenWindow},
-		{"--data-dir", dir, "--open", app.OpenCompose},
-		{"--data-dir", dir, "--open", "message:1"},
+		{"--data-dir", dir, "--open=" + app.OpenWindow},
+		{"--data-dir", dir, "--open=" + app.OpenCompose},
+		{"--data-dir", dir, "--open=message:1"},
 	}
 	if got := l.all(); !slices.EqualFunc(got, want, slices.Equal) {
 		t.Fatalf("interfaces started with %q, want %q", got, want)
@@ -524,6 +525,50 @@ func TestBackendShowsUI(t *testing.T) {
 	}
 	if n := len(l.all()); n != 4 {
 		t.Fatalf("%d interfaces started beside the connected one", n-4)
+	}
+
+	// A program's draft and a link the system handed the backend go to the
+	// connected interface as open.requested with what to open.
+	for _, what := range []string{"draft:5", "godwit://draft/5", "mailto:bob@example.com"} {
+		if err := showUI(svc, dir, what); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var opens []string
+	for len(opens) < 3 {
+		select {
+		case ev := <-evs:
+			if ev.Type == events.OpenRequested {
+				opens = append(opens, ev.Open)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("the interface got %q", opens)
+		}
+	}
+	if want := []string{"draft:5", "godwit://draft/5", "mailto:bob@example.com"}; !slices.Equal(opens, want) {
+		t.Fatalf("the interface got %q, want %q", opens, want)
+	}
+}
+
+// core.OpenDraft reaches the backend's showUI through core.Options.ShowUI;
+// with no interface it starts one for the draft, and without a desktop
+// session (no ShowUI) it says so.
+func TestBackendOpenDraftStartsUI(t *testing.T) {
+	l := launchesUIs(t)
+	var e *coretest.Env
+	e = coretest.New(t, coretest.WithoutAutoSync(), coretest.WithShowUI(func(what string) error { return showUI(e.Svc, e.DataDir, what) }))
+	svc, dir := e.Svc, e.DataDir
+	acc := e.AddAccount(t, "alice@example.com")
+	d, err := svc.NewDraft(t.Context(), acc.ID, "new", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.OpenDraft(t.Context(), d.ID); err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{{"--data-dir", dir, "--open=draft:" + strconv.FormatInt(d.ID, 10)}}
+	if got := l.all(); !slices.EqualFunc(got, want, slices.Equal) {
+		t.Fatalf("interfaces started with %q, want %q", got, want)
 	}
 }
 

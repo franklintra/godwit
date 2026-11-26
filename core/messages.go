@@ -362,6 +362,10 @@ type SearchQuery struct {
 	LabelID        int64 // mail with this label on
 	Unread         *bool // true for unread (\Seen absent), false for read (\Seen present)
 	Starred        *bool // true for starred (\Flagged present), false for unstarred
+	// MessageID is the RFC 5322 Message-ID, exactly, with or without its
+	// angle brackets (NormalizeMessageID): one message, in each account
+	// that has it.
+	MessageID string
 
 	fromHeaders []string // the stored From headers of FromAddr (withSenders)
 }
@@ -369,7 +373,7 @@ type SearchQuery struct {
 // Filtered reports whether a filter beyond the account is set: such a query
 // needs no text.
 func (q SearchQuery) Filtered() bool {
-	return strings.TrimSpace(q.From) != "" || strings.TrimSpace(q.FromAddr) != "" || !q.Since.IsZero() || !q.Until.IsZero() || q.HasAttachments || q.LabelID != 0 || q.Unread != nil || q.Starred != nil
+	return strings.TrimSpace(q.From) != "" || strings.TrimSpace(q.FromAddr) != "" || !q.Since.IsZero() || !q.Until.IsZero() || q.HasAttachments || q.LabelID != 0 || q.Unread != nil || q.Starred != nil || NormalizeMessageID(q.MessageID) != ""
 }
 
 // Search finds synced messages; accountID 0 searches every account.
@@ -384,7 +388,14 @@ func likeArg(s string) string {
 
 // SearchWith finds synced messages matching q, newest first. A query with
 // neither text nor a filter finds nothing.
+//
+// Text that is one Message-ID in angle brackets, as a header shows it
+// (<id@host>), finds that message (MessageID) instead: there is no search
+// syntax, but a pasted Message-ID is never meant as words.
 func (s *Service) SearchWith(ctx context.Context, q SearchQuery, limit int) ([]MessageSummary, error) {
+	if mid, ok := bracketedMessageID(q.Text); ok && q.MessageID == "" {
+		q.Text, q.MessageID = "", mid
+	}
 	if strings.TrimSpace(q.Text) == "" && !q.Filtered() {
 		return nil, nil
 	}
@@ -498,6 +509,10 @@ func searchFilter(q SearchQuery) (string, []any) {
 		} else {
 			cond += ` AND instr(m.flags, '\Seen') > 0`
 		}
+	}
+	if mid := NormalizeMessageID(q.MessageID); mid != "" {
+		cond += " AND " + messageIDCond
+		args = append(args, mid)
 	}
 	if q.Starred != nil {
 		if *q.Starred {

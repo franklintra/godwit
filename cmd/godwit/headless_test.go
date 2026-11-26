@@ -970,7 +970,7 @@ func TestHeadlessTrayActions(t *testing.T) {
 	launched := launchesUIs(t)
 	opened := func(what string) func() bool {
 		return func() bool {
-			return slices.ContainsFunc(launched.all(), func(args []string) bool { return slices.Contains(args, what) })
+			return slices.ContainsFunc(launched.all(), func(args []string) bool { return slices.Contains(args, "--open="+what) })
 		}
 	}
 	waitCond(t, "Open starts the interface", func() bool { sink.Actions().open(); return opened(app.OpenWindow)() })

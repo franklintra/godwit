@@ -153,9 +153,17 @@ func (s *Service) NewMailtoDraft(ctx context.Context, accountID int64, link stri
 		d.Headers = append(d.Headers, mail.Header{Name: h.Name, Value: defuseRefs(h.Value)})
 	}
 	if m.Body != "" {
-		d.HTML = "<p>" + escapeLines(defuseRefs(m.Body)) + "</p>" + d.HTML
+		d.HTML = TextToDraftHTML(m.Body) + d.HTML
 	}
 	return s.SaveDraft(ctx, d)
+}
+
+// TextToDraftHTML is plain text from outside Godwit (a link's body, a
+// program's) as a draft paragraph: escaped, its line breaks kept, and any
+// link reference in it defused (defuseRefs), so sending the draft never
+// expands one into a link of the user's mail.
+func TextToDraftHTML(text string) string {
+	return "<p>" + escapeLines(defuseRefs(text)) + "</p>"
 }
 
 func (s *Service) unsubscribeMethod(ctx context.Context, messageID int64) (Unsubscribe, error) {

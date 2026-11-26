@@ -71,6 +71,7 @@ ExportAccounts
 FailQuestion
 FetchModels
 Find
+FindMessagesByMessageID
 FirstTimeRecipients
 GetAttachment
 GetConversation
@@ -130,6 +131,8 @@ MoveToRole
 NewConversation
 NewDraft
 NewMailtoDraft
+OpenDraft
+OpenMessage
 OpenServerDraft
 PendingLabels
 PendingMCPSends

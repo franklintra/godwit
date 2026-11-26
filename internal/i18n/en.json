@@ -334,6 +334,16 @@
   "link_copy": "Copy link",
   "link_open": "Open",
   "link_title": "Open this link?",
+  "open_bad_link": "Godwit can’t open this link",
+  "open_no_account": "Godwit has no account {arg1}",
+  "@open_no_account": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "open_no_message": "Godwit has no message with this Message-ID",
   "mail_accounts": "Accounts",
   "mail_action_archive": "Archive",
   "mail_action_delete": "Delete",
