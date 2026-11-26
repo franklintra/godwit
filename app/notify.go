@@ -111,19 +111,27 @@ func (a *App) showUnread(inbox int) {
 // new compose window.
 const OpenWindow, OpenCompose = "window", "compose"
 
-// Open shows what a launch (godwit --open) or the backend's tray asks for:
-// OpenWindow, OpenCompose, or else a notification id (NotificationClicked).
+// Open shows what a launch (godwit --open), the backend's tray or a
+// program (core.OpenDraft, OpenMessage) asks for: OpenWindow, OpenCompose,
+// a draft (draft:<id>) in its compose window, a mailto: or godwit: link
+// (openTarget), or else a notification id such as message:<id>
+// (NotificationClicked).
 func (a *App) Open(what string) {
-	switch what {
-	case OpenWindow:
+	_, draft := core.ParseOpenTarget(what, core.OpenDraftPrefix)
+	switch {
+	case what == OpenWindow:
 		a.plat.ShowWindow()
-	case OpenCompose:
+	case what == OpenCompose || draft || IsOpenURL(what):
 		if !a.loaded { // no account to write from yet: after the first load, as a click waits
 			a.plat.ShowWindow()
 			a.noteFirst = what
 			return
 		}
-		a.Compose()
+		if what == OpenCompose {
+			a.Compose()
+			return
+		}
+		a.openTarget(what)
 	default:
 		a.NotificationClicked(what)
 	}

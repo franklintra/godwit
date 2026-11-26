@@ -21,11 +21,19 @@ export default {
   frontendDist: "web/dist",
   bindings: "web/src/mygo.ts",
   i18n: { dir: "internal/i18n", source: "en" },
+  // godwit: links reach App.OnOpenURL (ADR 0045); mailto: ones too on macOS, below.
+  urlSchemes: ["godwit"],
   macos: {
     icon: "assets/AppIcon.icon", // compiled with actool, which needs Xcode 26+; without it the app keeps icon's .icns
     // Set both only for a signed build with an authorized profile (.github/actions/macos-sign/README.md).
     provisioningProfile,
-    infoPlist: { NSUserActivityTypes: ["INSendMessageIntent"] },
+    infoPlist: {
+      NSUserActivityTypes: ["INSendMessageIntent"],
+      // urlSchemes' entry plus mailto:, so Godwit can be chosen as the mail app
+      // (ADR 0045). Not in urlSchemes: the Windows installer would take
+      // HKCU\Software\Classes\mailto, and its uninstaller delete that key.
+      CFBundleURLTypes: [{ CFBundleURLName: "email.godwit.app", CFBundleURLSchemes: ["godwit", "mailto"] }],
+    },
     signingIdentity: env.MACOS_SIGNING_IDENTITY || "-",
     // Native plugins are libraries other developers sign: the hardened runtime
     // loads them only with library validation off (docs/adr/0017-macos-library-validation.md).

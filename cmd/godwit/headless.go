@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strconv"
@@ -103,10 +104,18 @@ func mygoHeadlessDesktop() *headlessDesktop {
 			defer offLocale()
 			offClick := mygo.App.OnNotificationClick(func(id string) {
 				if svc != nil {
-					showUI(svc, dataDir, id)
+					_ = showUI(svc, dataDir, id) // logged there
 				}
 			})
 			defer offClick()
+			// A mailto: or godwit: link the system handed this process, the
+			// same bundle as the interface (ADR 0045): the interface opens it.
+			offURL := mygo.App.OnOpenURL(func(u string) {
+				if svc != nil && app.IsOpenURL(u) {
+					_ = showUI(svc, dataDir, u) // logged there
+				}
+			})
+			defer offURL()
 			// Godwit opened again (Dock, Finder) while only this backend runs:
 			// the system may hand the reopen to it, the same bundle.
 			offActivate := mygo.App.OnActivate(func(visible bool) {
@@ -114,7 +123,7 @@ func mygoHeadlessDesktop() *headlessDesktop {
 					mygo.App.SetActivationPolicy(mygo.ActivationPolicyAccessory)
 				}, func() {
 					if svc != nil {
-						showUI(svc, dataDir, app.OpenWindow)
+						_ = showUI(svc, dataDir, app.OpenWindow) // logged there
 					}
 				})
 			})
@@ -246,6 +255,10 @@ func startHeadlessServer(ctx context.Context, dataDir string, stderr io.Writer, 
 		opts.StopWithUI = os.Getenv("MYGO_ENV") == "development" // mygo dev runs the interface so; we inherit it
 	}
 	opts.TrayShown = func() bool { return trayShown != nil && trayShown() }
+	var show func(what string) error // set with the Service, before the Local API serves
+	if d != nil {                    // a desktop session: a window can be shown, or the interface started
+		opts.ShowUI = func(what string) error { return show(what) }
+	}
 	var notifyMCP func(id int64) bool // set with the platform, before the Local API serves
 	if d != nil && d.newPlatform != nil {
 		opts.NotifyMCPSend = func(id int64) bool { return notifyMCP != nil && notifyMCP(id) }
@@ -264,6 +277,7 @@ func startHeadlessServer(ctx context.Context, dataDir string, stderr io.Writer, 
 		}
 		return nil, 1
 	}
+	show = func(what string) error { return showUI(svc, dataDir, what) }
 	old := slog.Default() // the log package follows slog's default
 	slog.SetDefault(slog.New(newLogHandler(logOutput(stderr), svc.Redact)))
 	closeSvc := func() {
@@ -312,7 +326,7 @@ func startHeadlessServer(ctx context.Context, dataDir string, stderr io.Writer, 
 				if ts, ok := plat.(interface{ TrayShown() bool }); ok {
 					trayShown = ts.TrayShown
 				}
-				tray = newBackendTray(svc, plat, lang, post, clock, logWarn, func(what string) { showUI(svc, dataDir, what) },
+				tray = newBackendTray(svc, plat, lang, post, clock, logWarn, func(what string) { _ = showUI(svc, dataDir, what) },
 					func() { quitFromTray(svc, onStop) })
 			}
 		}
@@ -432,14 +446,20 @@ func quitFromTray(svc *core.Service, stop func()) {
 	svc.Publish(events.Event{Type: events.QuitRequested})
 }
 
-// uiCmd is the interface the backend starts on dataDir to open what: this
-// executable, not headless, outliving the backend (detachBackend). Tests swap it.
+// uiCmd is the interface the backend (or `godwit open`) starts on dataDir
+// to open what: this executable, not headless, outliving its starter
+// (detachBackend). Tests swap it. --open=what is one argument: mygo takes a
+// separate argument that is a link of Godwit's schemes for one more link to
+// open (OnOpenURL), which would open it twice.
 var uiCmd = func(dataDir, what string) (*exec.Cmd, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return nil, err
 	}
-	argv := uiArgv(runtime.GOOS, exe, "--data-dir", dataDir, "--open", what)
+	if real, err := filepath.EvalSymlinks(exe); err == nil { // godwit linked onto PATH: the bundle's executable
+		exe = real
+	}
+	argv := uiArgv(runtime.GOOS, exe, "--data-dir", dataDir, "--open="+what)
 	cmd := exec.Command(argv[0], argv[1:]...)
 	detachBackend(cmd)
 	return cmd, nil
@@ -456,22 +476,18 @@ func uiArgv(goos, exe string, args ...string) []string {
 }
 
 // showUI opens what in the interface (app.App.Open: app.OpenWindow,
-// app.OpenCompose or a notification id), for the tray's Open and Compose and
-// a click on one of the backend's notifications: a connected interface is asked on its events, else
-// one is started (uiCmd). The interface dedupes clicks, as macOS may hand one
-// to it as well; a second interface started meanwhile hands its --open to the
-// first (OnSecondInstance).
-func showUI(svc *core.Service, dataDir, what string) {
+// app.OpenCompose, a notification id, a program's draft or message
+// (core.Options.ShowUI), or a link the system handed the backend), for the
+// tray's Open and Compose, a click on one of the backend's notifications,
+// core.OpenDraft and OpenMessage, and links: a connected interface is asked
+// on its events, else one is started (uiCmd). The interface dedupes clicks
+// and links, as macOS may hand one to it as well; a second interface started
+// meanwhile hands its --open to the first (OnSecondInstance). An interface
+// that cannot be started is logged and returned.
+func showUI(svc *core.Service, dataDir, what string) error {
 	if svc.UIReady() { // one starting or quitting would drop the request: another is started, and hands it on
-		ev := events.Event{Type: events.NotificationClicked, Notification: what}
-		switch what {
-		case app.OpenWindow:
-			ev = events.Event{Type: events.OpenRequested}
-		case app.OpenCompose:
-			ev = events.Event{Type: events.ComposeRequested}
-		}
-		svc.Publish(ev)
-		return
+		svc.Publish(openEvent(what))
+		return nil
 	}
 	cmd, err := uiCmd(dataDir, what)
 	if err == nil {
@@ -479,9 +495,27 @@ func showUI(svc *core.Service, dataDir, what string) {
 	}
 	if err != nil {
 		slog.Warn("starting the interface", "err", err)
-		return
+		return fmt.Errorf("starting Godwit's window: %w", err)
 	}
 	go func() { _ = cmd.Wait() }() // reaps it; its exit is its own
+	return nil
+}
+
+// openEvent is the event that asks a connected interface to open what:
+// the tray's Open and Compose, a draft or a link with Open set, and else a
+// notification id (message:<id> as well, whether a click or OpenMessage
+// gave it).
+func openEvent(what string) events.Event {
+	_, draft := core.ParseOpenTarget(what, core.OpenDraftPrefix)
+	switch {
+	case what == app.OpenWindow:
+		return events.Event{Type: events.OpenRequested}
+	case what == app.OpenCompose:
+		return events.Event{Type: events.ComposeRequested}
+	case draft || app.IsOpenURL(what):
+		return events.Event{Type: events.OpenRequested, Open: what}
+	}
+	return events.Event{Type: events.NotificationClicked, Notification: what}
 }
 
 type systemClock struct{}

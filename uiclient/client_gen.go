@@ -293,6 +293,10 @@ func (cl *Client) Find(ctx context.Context, q core.FindQuery) (core.FindResult, 
 	return call[core.FindResult](cl, ctx, "Find", q)
 }
 
+func (cl *Client) FindMessagesByMessageID(ctx context.Context, messageID string) ([]core.MessageRef, error) {
+	return call[[]core.MessageRef](cl, ctx, "FindMessagesByMessageID", messageID)
+}
+
 func (cl *Client) FirstTimeRecipients(ctx context.Context, addrs []string) ([]string, error) {
 	return call[[]string](cl, ctx, "FirstTimeRecipients", addrs)
 }

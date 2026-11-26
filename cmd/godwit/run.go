@@ -19,6 +19,8 @@ const usage = `usage:
   godwit [--data-dir DIR]                                the desktop app
   godwit --headless [--data-dir DIR]                     serve the Local API without a window
   godwit call [--data-dir DIR] METHOD [JSON_ARGS_ARRAY]  call the running Godwit once
+  godwit open [--data-dir DIR] TARGET                    show TARGET in Godwit's window: draft:ID, message:ID,
+                                                         compose, a mailto: or a godwit: link
   godwit mcp [--data-dir DIR]                            an MCP server on stdio for agents: read mail, write drafts
   godwit dev-sync-db                                    replace the dev database from production (stop both first)
   godwit --version
@@ -32,6 +34,9 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 	if len(args) > 0 && args[0] == "call" {
 		return call(ctx, args[1:], stdout, stderr)
+	}
+	if len(args) > 0 && args[0] == "open" {
+		return openCmd(args[1:], stderr)
 	}
 	if len(args) > 0 && args[0] == "mcp" {
 		return mcpCmd(ctx, args[1:], stdin, stdout, stderr)
@@ -49,7 +54,9 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	if code, ok := parse(fs, args); !ok {
 		return code
 	}
-	if fs.NArg() > 0 {
+	if fs.NArg() == 1 && app.IsOpenURL(fs.Arg(0)) && *open == app.OpenWindow {
+		*open = fs.Arg(0) // Windows and Linux start Godwit with the link it is the handler of
+	} else if fs.NArg() > 0 {
 		fmt.Fprintf(stderr, "godwit: unknown command %q\n", fs.Arg(0))
 		fs.Usage()
 		return 2
@@ -69,13 +76,21 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	return gui(ctx, dir, *open)
 }
 
-// openArg is what a launch's args ask the interface to open (--open, as run
-// parses it), app.OpenWindow when nothing: a second launch hands them to the
-// running interface (OnSecondInstance).
+// openArg is what a launch's args ask the interface to open (--open, or a
+// mailto: or godwit: link as the only other argument, as run parses them),
+// app.OpenWindow when nothing: a second launch hands them to the running
+// interface (OnSecondInstance).
 func openArg(args []string) string {
+	link := ""
 	for i, a := range args {
 		name, v, eq := strings.Cut(strings.TrimLeft(a, "-"), "=")
-		if name != "open" || !strings.HasPrefix(a, "-") {
+		if !strings.HasPrefix(a, "-") {
+			if app.IsOpenURL(a) {
+				link = a
+			}
+			continue
+		}
+		if name != "open" {
 			continue
 		}
 		if !eq && i+1 < len(args) {
@@ -83,7 +98,7 @@ func openArg(args []string) string {
 		}
 		return cmp.Or(v, app.OpenWindow)
 	}
-	return app.OpenWindow
+	return cmp.Or(link, app.OpenWindow)
 }
 
 func newFlagSet(name string, stderr io.Writer) *flag.FlagSet {

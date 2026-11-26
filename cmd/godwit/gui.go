@@ -127,6 +127,20 @@ func gui(ctx context.Context, dataDir, open string) int {
 		}
 		a.Open(openArg(args))
 	})
+	// A mailto: or godwit: link the system hands Godwit (ADR 0045), or one a
+	// later launch was given, which mygo also finds among its arguments
+	// (App.Open drops it the second time). Before Run, to get the one that
+	// launched it.
+	mygo.App.OnOpenURL(func(link string) {
+		if !app.IsOpenURL(link) {
+			return
+		}
+		if a == nil {
+			launched = append(launched, link)
+			return
+		}
+		a.Open(link)
+	})
 	mygo.App.OnNotificationClick(func(id string) { // before Run, to get that one
 		if a == nil {
 			clicked = append(clicked, id)
