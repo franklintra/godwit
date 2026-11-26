@@ -70,6 +70,7 @@ ExportAccounts
 FailQuestion
 FetchModels
 Find
+FindMessagesByMessageID
 FirstTimeRecipients
 GetAttachment
 GetConversation
