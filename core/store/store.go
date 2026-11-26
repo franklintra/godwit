@@ -121,14 +121,21 @@ func (db *DB) init(ctx context.Context, path string) error {
 		backup(ctx, db, path, cur)
 	}
 	for v := cur + 1; v <= len(Migrations); v++ {
+		todo, err := db.skipForkObjects(ctx, v, Migrations[v-1])
+		if err != nil {
+			return err
+		}
 		var stmts []sqlite.Statement
-		for _, s := range Migrations[v-1] {
+		for _, s := range todo {
 			stmts = append(stmts, sqlite.Statement{SQL: s})
 		}
 		stmts = append(stmts, sqlite.Statement{SQL: fmt.Sprintf("PRAGMA user_version = %d", v)})
 		if _, err := db.Transaction(ctx, stmts); err != nil {
 			return fmt.Errorf("store: migration %d: %w", v, err)
 		}
+	}
+	if err := db.applyFork(ctx); err != nil {
+		return err
 	}
 	dropBackups(path, cur)
 	return db.convertAutoVacuum(ctx)

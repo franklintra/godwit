@@ -2,24 +2,18 @@ package store_test
 
 import (
 	"path/filepath"
-	"slices"
-	"strings"
 	"testing"
 
 	"github.com/godwit-email/godwit/core/store"
 	"github.com/stretchr/testify/require"
 )
 
-// Drafts stored before drafts.headers existed read as having none.
+// Drafts stored before drafts.headers existed read as having none. The
+// column is a fork step (FORK.md), applied on top of upstream's schema.
 func TestMigrationDraftHeaders(t *testing.T) {
-	all := store.Migrations
-	// Up to the migration under test, which need not stay the last one.
-	i := slices.IndexFunc(all, func(m []string) bool {
-		return strings.Contains(strings.Join(m, "\n"), "ALTER TABLE drafts ADD COLUMN headers")
-	})
-	require.Positive(t, i)
-	store.Migrations = all[:i]
-	defer func() { store.Migrations = all }()
+	all := store.ForkMigrations
+	store.ForkMigrations = nil // upstream's schema alone
+	defer func() { store.ForkMigrations = all }()
 	path := filepath.Join(t.TempDir(), "drafts.db")
 	db, err := store.Open(t.Context(), path)
 	require.NoError(t, err)
@@ -29,12 +23,13 @@ func TestMigrationDraftHeaders(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 
-	store.Migrations = all
+	store.ForkMigrations = all
 	db, err = store.Open(t.Context(), path)
 	require.NoError(t, err)
 	defer db.Close()
-	rows, err := db.Query(t.Context(), "SELECT headers, subject FROM drafts WHERE id = 1")
+	rows, err := db.Query(t.Context(), "SELECT headers, read_receipt, subject FROM drafts WHERE id = 1")
 	require.NoError(t, err)
 	require.Equal(t, "[]", store.Str(rows.Values[0][0]))
-	require.Equal(t, "old", store.Str(rows.Values[0][1]))
+	require.Equal(t, int64(0), store.Int(rows.Values[0][1]))
+	require.Equal(t, "old", store.Str(rows.Values[0][2]))
 }
