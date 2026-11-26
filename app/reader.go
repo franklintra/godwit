@@ -189,6 +189,8 @@ type msgBody struct {
 
 	timing bodyTiming // how long the body took to show (GODWIT_READER_TIMING)
 
+	openpgp openpgpState // what the user's gpg said of it (reader_openpgp.go)
+
 	unsub     core.Unsubscribe // how it unsubscribes, by its headers; none until asked
 	unsubbing bool             // its unsubscribe is under way
 	attSel    map[int64]bool   // selected attachment IDs for batch save
@@ -504,6 +506,7 @@ func (r *reader) loadBody(id int64) {
 		r.openView(id, &m)
 		r.loadAvatar(id, b.avatarAllow)
 		r.loadUnsubscribe(id)
+		r.loadOpenPGP(id)
 		a.stageCached(m.Attachments)
 	})
 }
@@ -2235,6 +2238,7 @@ func (r *reader) message(c *ui.Context, m core.MessageSummary) {
 					ui.Row(c).Wrap().Gap(th.Space(1.5)).AlignItems(ui.Center).Children(func() {
 						r.recipientsLine(c, m, b)
 						r.trackersNote(c, b)
+						r.openpgpNote(c, b)
 						r.imagesNote(c, m, b, addr)
 					})
 				})

@@ -101,6 +101,21 @@ var ForkMigrations = []ForkMigration{{
 			UNIQUE(account_id, email, name))`,
 		`ALTER TABLE drafts ADD COLUMN identity_id INTEGER REFERENCES identities(id) ON DELETE SET NULL`,
 	},
+}, {
+	Name: "openpgp",
+	Stmts: []string{
+		// OpenPGP through the user's GnuPG (ADR 0050): the secret key an account
+		// signs with (its fingerprint; '' none) and its defaults for new drafts,
+		// and a draft's own choices, NULL while it follows its account's.
+		// openpgp_encrypt is off, auto or on.
+		`CREATE TABLE account_openpgp (
+			account_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+			key_fpr TEXT NOT NULL DEFAULT '',
+			sign INTEGER NOT NULL DEFAULT 0,
+			encrypt INTEGER NOT NULL DEFAULT 0)`,
+		`ALTER TABLE drafts ADD COLUMN openpgp_sign INTEGER`,
+		`ALTER TABLE drafts ADD COLUMN openpgp_encrypt TEXT`,
+	},
 }}
 
 // schemaObject is what an additive statement creates.

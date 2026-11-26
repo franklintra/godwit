@@ -551,6 +551,7 @@ func (p *settingsPage) accountView(c *ui.Context, acc core.Account) {
 	}
 	p.accountSignatureView(c, acc)
 	p.identitiesSection(c, acc)
+	p.openpgp.section(c, a, acc)
 	// The text area is the section's body, with no card around it, as macOS shows a long text.
 	ui.Column(c).Gap(theme.SectionGap).Children(func() {
 		sectionTitle(c, i18n.T("settings.account.ai"))

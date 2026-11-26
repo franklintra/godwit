@@ -62,6 +62,9 @@ type Draft struct {
 	// From is the From header the draft is sent with, from its account and
 	// identity. SaveDraft ignores this field.
 	From string
+	// OpenPGP is whether it is signed and encrypted when sent: its account's
+	// defaults until SetDraftOpenPGP sets it. SaveDraft ignores this field.
+	OpenPGP DraftOpenPGP
 }
 
 // DraftAttachment is a file copied into the draft's directory.
@@ -497,7 +500,8 @@ func (s *Service) GetDraft(ctx context.Context, id int64) (Draft, error) {
 	// An identity of another account (none should be) sends as the account itself.
 	rows, err := s.db.Query(ctx, `SELECT d.account_id, d.mode, d.source_message_id, d.to_addrs, d.cc_addrs, d.bcc_addrs, d.reply_to,
 		d.subject, d.body_html, d.updated_at, d.revision, d.from_program, d.scheduled_for, COALESCE(i.id, 0),
-		COALESCE(a.name, ''), COALESCE(a.email, ''), COALESCE(i.name, ''), COALESCE(i.email, ''), d.headers, d.read_receipt
+		COALESCE(a.name, ''), COALESCE(a.email, ''), COALESCE(i.name, ''), COALESCE(i.email, ''), d.headers, d.read_receipt,
+		d.openpgp_sign, d.openpgp_encrypt
 		FROM drafts d LEFT JOIN accounts a ON a.id = d.account_id LEFT JOIN identities i ON i.id = d.identity_id AND i.account_id = d.account_id
 		WHERE d.id = ?`, id)
 	if err != nil {
@@ -514,6 +518,9 @@ func (s *Service) GetDraft(ctx context.Context, id int64) (Draft, error) {
 		From:    fromHeader(store.Str(r[14]), store.Str(r[15]), store.Str(r[16]), store.Str(r[17])),
 		Headers: decodeHeaders(store.Str(r[18])), ReadReceipt: store.Int(r[19]) != 0}
 	if d.HTML, err = s.sanitizeDraft(ctx, store.Str(r[8])); err != nil {
+		return Draft{}, err
+	}
+	if d.OpenPGP, err = s.draftOpenPGP(ctx, d.AccountID, r[20], r[21]); err != nil {
 		return Draft{}, err
 	}
 	ar, err := s.db.Query(ctx, "SELECT id, filename, content_type, size FROM draft_attachments WHERE draft_id = ? ORDER BY id", id)
@@ -924,6 +931,10 @@ func (s *Service) enqueue(ctx context.Context, draftID, rev int64, checked []str
 	}
 	if rs != nil && rs.ruleID != 0 {
 		o.Header = map[string]string{mail.RuleHeader: strconv.FormatInt(rs.ruleID, 10)}
+	} else if o.OpenPGP, err = s.outgoingOpenPGP(ctx, d); err != nil {
+		// A rule's forward is never signed or encrypted: it goes unattended,
+		// with no one there to give gpg-agent a passphrase (ADR 0050).
+		return err
 	}
 	if _, err := s.threadHeaders(ctx, d, &o); err != nil {
 		return err

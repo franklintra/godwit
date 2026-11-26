@@ -35,6 +35,8 @@ type Outgoing struct {
 	// Draft builds a copy for the Drafts folder, not mail to send: Bcc is
 	// written to the header, where other mail apps read it back.
 	Draft bool
+	// OpenPGP, when set, signs or encrypts the message with PGP/MIME.
+	OpenPGP *OpenPGP
 }
 
 // RuleHeader marks mail a Godwit rule forwarded; mail carrying it is never
@@ -202,6 +204,13 @@ func Build(o Outgoing, now time.Time) (raw []byte, messageID string, err error) 
 	}
 	if err := body(w); err != nil {
 		return nil, "", err
+	}
+	if o.OpenPGP != nil {
+		sealed, err := sealOpenPGP(buf.Bytes(), o.OpenPGP)
+		if err != nil {
+			return nil, "", err
+		}
+		return sealed, messageID, nil
 	}
 	return buf.Bytes(), messageID, nil
 }

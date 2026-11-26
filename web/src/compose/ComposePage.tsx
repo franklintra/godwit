@@ -35,6 +35,7 @@ import { IdleToolbar } from "./editor/Toolbar";
 import { Fields, type FieldsEdit, type FieldsHandle } from "./fields/Fields";
 import { Headers } from "./Headers";
 import { Notices } from "./Notices";
+import { OpenPGP } from "./OpenPGP";
 import { CmdK } from "./review/CmdK";
 import { BODY, Review, reviewSummary, Static } from "./review/Review";
 import { SendBar } from "./SendBar";
@@ -299,6 +300,8 @@ function Compose({
   const [identity, setIdentity] = useState(state.identity); // ADR 0048: 0 is the account's own address
   const [accounts, setAccounts] = useState(state.accounts);
   const [fromProgram, setFromProgram] = useState(state.fromProgram); // ADR 0043: check before sending
+  const [pgp, setPgp] = useState(state.openpgp); // ADR 0050: signed, encrypted
+  const [pgpMissing, setPgpMissing] = useState<string[]>([]); // recipients without a key
   const [signature, setSignature] = useState(sigOf(state));
   const [quote, setQuote] = useState(state.quote);
   const [showQuote, setShowQuote] = useState(false);
@@ -421,6 +424,7 @@ function Compose({
       setFrom(l.from);
       setIdentity(l.identity);
       setFromProgram(l.fromProgram);
+      setPgp(l.openpgp);
       setSignature(sigOf(l));
       setQuote(l.quote);
       setAttachments(l.attachments);
@@ -589,6 +593,29 @@ function Compose({
     setBlocked(null);
   };
   const failure = (e: unknown) => toast.error(errorText(e, t));
+  // The recipients without a valid OpenPGP key, read from the local keyring while encryption is asked for.
+  const recipientsKey = JSON.stringify([...f.to, ...f.cc, ...f.bcc]);
+  const recipientCount = f.to.length + f.cc.length + f.bcc.length;
+  useEffect(() => {
+    const addrs = JSON.parse(recipientsKey) as string[];
+    if (!pgp.available || pgp.encrypt === "off" || addrs.length === 0) {
+      setPgpMissing([]);
+      return;
+    }
+    let live = true;
+    const id = setTimeout(() => {
+      api.openPGPMissing(addrs).then(
+        (m) => {
+          if (live) setPgpMissing(m ?? []);
+        },
+        () => {},
+      );
+    }, 300);
+    return () => {
+      live = false;
+      clearTimeout(id);
+    };
+  }, [recipientsKey, pgp.available, pgp.encrypt]);
   // Plugins warned and none blocked: Send reads 仍然发送 and goes ahead despite the warnings.
   const warned = warnings.list.length > 0 && !blocked;
 
@@ -623,6 +650,7 @@ function Compose({
       const r = await sv.run((rev) => api.setFrom(account, ident, rev));
       if (!r || r.conflict) back();
       else {
+        setPgp(r.openpgp); // the new account's key, or none
         setSignature(sigOf(r));
         setSavedAt(fmt(new Date(r.updatedAt)));
         // The identity's Reply-To may have replaced the draft's: shown, and kept by the next save.
@@ -630,6 +658,19 @@ function Compose({
       }
     } catch (e) {
       back();
+      failure(e);
+    }
+  };
+  // Sign and Encrypt (ADR 0050), saved against the revision as an account switch is.
+  const onOpenPGP = async (sign: boolean, encrypt: string) => {
+    if (!sv) return;
+    try {
+      const r = await sv.run((rev) => api.setOpenPGP(sign, encrypt, rev));
+      if (r && !r.conflict) {
+        setPgp(r.openpgp);
+        setSavedAt(fmt(new Date(r.updatedAt)));
+      }
+    } catch (e) {
       failure(e);
     }
   };
@@ -777,6 +818,7 @@ function Compose({
         setFrom(l.from);
         setIdentity(l.identity);
         setFromProgram(l.fromProgram);
+        setPgp(l.openpgp);
         setSignature(sigOf(l));
         setQuote(l.quote);
         setAttachments(l.attachments);
@@ -1050,6 +1092,15 @@ function Compose({
               <div ref={setToolbarSlot} data-toolbar className="contents">
                 {!showEditor && <IdleToolbar t={t} attach={attach} />}
               </div>
+              <OpenPGP
+                state={pgp}
+                missing={pgpMissing}
+                recipients={recipientCount}
+                frozen={locked}
+                onChange={onOpenPGP}
+                menu={api.popupMenu}
+                t={t}
+              />
               <SendBar
                 anchor={dock.send}
                 sending={sending}

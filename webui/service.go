@@ -11,6 +11,7 @@ import (
 
 // Service is the subset of the mail engine the web UI pages call.
 type Service interface {
+	AccountOpenPGP(ctx context.Context, accountID int64) (core.AccountOpenPGP, error)
 	AddAttachmentAt(ctx context.Context, draftID, revision int64, srcPath string) (core.DraftAttachment, int64, error)
 	AnswerQuestion(ctx context.Context, id int64, round int, answers [][]string) error
 	ApplyEditedProposal(ctx context.Context, approvalID int64, edited string) error
@@ -47,6 +48,8 @@ type Service interface {
 	ModelName(ctx context.Context, ref string) string
 	NewConversation(ctx context.Context, kind string, draftID int64) (core.Conversation, error)
 	NewMailtoDraft(ctx context.Context, accountID int64, link string) (core.Draft, error)
+	OpenPGPMessage(ctx context.Context, messageID int64) (core.OpenPGPView, error)
+	OpenPGPRecipientKeys(ctx context.Context, addrs []string) ([]core.OpenPGPRecipient, error)
 	ReadingLanguage(ctx context.Context) string
 	RemoveAttachmentAt(ctx context.Context, draftID, attachmentID, revision int64) (int64, error)
 	ResolveAll(ctx context.Context, runID int64, accept bool) error
@@ -65,6 +68,7 @@ type Service interface {
 	SetDraftAccount(ctx context.Context, id, accountID, revision int64) (core.Draft, error)
 	SetDraftFrom(ctx context.Context, id, accountID, identityID, revision int64) (core.Draft, error)
 	SetDraftModel(ctx context.Context, draftID int64, model string) error
+	SetDraftOpenPGP(ctx context.Context, draftID, revision int64, o core.DraftOpenPGP) (core.Draft, error)
 	SignatureEditor(ctx context.Context, id int64) (string, error)
 	SignatureShown(ctx context.Context, block string) (string, error)
 	SubscribeConversation(id int64) (<-chan core.WitEvent, func())

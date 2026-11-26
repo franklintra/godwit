@@ -76,7 +76,7 @@ func cacheFiles(dataDir string) int {
 func TestMCPAllowlistContents(t *testing.T) {
 	want := []string{"FindMessagesByMessageID", "GetDraft", "GetMessageText", "GetThread", "ListAccounts", "ListDrafts", "ListFolders",
 		"ListIdentities", "ListMessages", "ListThreads", "NewDraft", "OpenDraft", "OpenMessage", "RequestMCPSend", "SaveDraft", "SavedViews", "Search", "SearchContacts",
-		"SetDraftFrom", "SetThreadDeadline", "ViewContents", "ViewGroupPage"}
+		"SetDraftFrom", "SetDraftOpenPGP", "SetThreadDeadline", "ViewContents", "ViewGroupPage"}
 	newMode := []json.RawMessage{json.RawMessage(`1`), json.RawMessage(`"new"`), json.RawMessage(`0`)}
 	var got []string
 	for m := range reflect.TypeFor[*core.Service]().Methods() {

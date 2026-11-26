@@ -29,13 +29,15 @@ const (
 // put a draft or a message the user already has on the user's screen in
 // Godwit (starting its window if none is open) for the user to review: they
 // return nothing of it, and send or change nothing.
+// SetDraftOpenPGP turns a draft's OpenPGP signing or encryption on or up,
+// never off or down (core refuses a program's downgrade); it sends nothing.
 var mcpMethods = map[string]bool{
 	"ListAccounts": true, "ListFolders": true, "ListThreads": true, "GetThread": true,
 	"ListMessages": true, "GetMessageText": true, "Search": true, "SearchContacts": true, "FindMessagesByMessageID": true,
 	"ListDrafts": true, "GetDraft": true, "NewDraft": true, "SaveDraft": true, "OpenDraft": true, "OpenMessage": true,
 	"ListIdentities": true, "SetDraftFrom": true,
 	"SavedViews": true, "ViewContents": true, "ViewGroupPage": true,
-	"RequestMCPSend": true, "SetThreadDeadline": true,
+	"RequestMCPSend": true, "SetThreadDeadline": true, "SetDraftOpenPGP": true,
 }
 
 // mcpDraftModes are the NewDraft modes the mcp role may use; forward is not

@@ -72,6 +72,7 @@ const pages: Record<string, { states: string[]; entry: () => Promise<unknown>; s
           conflict: false,
           signatureHtml: "",
           updatedAt: Date.now(),
+          openpgp: { available: false, sign: false, encrypt: "off" },
           body: body(),
           accounts,
           from,
