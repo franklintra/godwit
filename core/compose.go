@@ -44,6 +44,9 @@ type Draft struct {
 	// ScheduledFor is the original send time of a scheduled message taken back
 	// from the outbox, or zero if none. SaveDraft ignores this field.
 	ScheduledFor time.Time
+	// OpenPGP is whether it is signed and encrypted when sent: its account's
+	// defaults until SetDraftOpenPGP sets it. SaveDraft ignores this field.
+	OpenPGP DraftOpenPGP
 }
 
 // DraftAttachment is a file copied into the draft's directory.
@@ -419,7 +422,7 @@ func (s *Service) DraftForApproval(ctx context.Context, approvalID int64) (int64
 // read, covering rows stored before SaveDraft sanitized.
 func (s *Service) GetDraft(ctx context.Context, id int64) (Draft, error) {
 	rows, err := s.db.Query(ctx, `SELECT account_id, mode, source_message_id, to_addrs, cc_addrs, bcc_addrs, reply_to,
-		subject, body_html, updated_at, revision, from_program, scheduled_for FROM drafts WHERE id = ?`, id)
+		subject, body_html, updated_at, revision, from_program, scheduled_for, openpgp_sign, openpgp_encrypt FROM drafts WHERE id = ?`, id)
 	if err != nil {
 		return Draft{}, err
 	}
@@ -432,6 +435,9 @@ func (s *Service) GetDraft(ctx context.Context, id int64) (Draft, error) {
 		ReplyTo: store.Str(r[6]), Subject: store.Str(r[7]), UpdatedAt: time.Unix(store.Int(r[9]), 0), Revision: store.Int(r[10]),
 		FromProgram: store.Int(r[11]) != 0, ScheduledFor: unixMilli(r[12])}
 	if d.HTML, err = s.sanitizeDraft(ctx, store.Str(r[8])); err != nil {
+		return Draft{}, err
+	}
+	if d.OpenPGP, err = s.draftOpenPGP(ctx, d.AccountID, r[13], r[14]); err != nil {
 		return Draft{}, err
 	}
 	ar, err := s.db.Query(ctx, "SELECT id, filename, content_type, size FROM draft_attachments WHERE draft_id = ? ORDER BY id", id)
@@ -792,6 +798,10 @@ func (s *Service) enqueue(ctx context.Context, draftID, rev int64, checked []str
 	}
 	if rs != nil && rs.ruleID != 0 {
 		o.Header = map[string]string{mail.RuleHeader: strconv.FormatInt(rs.ruleID, 10)}
+	} else if o.OpenPGP, err = s.outgoingOpenPGP(ctx, d); err != nil {
+		// A rule's forward is never signed or encrypted: it goes unattended,
+		// with no one there to give gpg-agent a passphrase (ADR 0045).
+		return err
 	}
 	if d.SourceMessageID != 0 && (d.Mode == "reply" || d.Mode == "reply_all" || d.Mode == "forward") {
 		rows, err := s.db.Query(ctx, "SELECT message_id, refs FROM messages WHERE id = ?", d.SourceMessageID)

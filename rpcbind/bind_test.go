@@ -336,6 +336,7 @@ func TestWireCodesPinned(t *testing.T) {
 		"message_too_large": rpc.ErrTooLarge,
 		"no_outbox_draft":   core.ErrNoOutboxDraft,
 		"no_unsubscribe":    core.ErrNoUnsubscribe, "unsubscribe_web": core.ErrUnsubscribeWeb, "unsubscribing": core.ErrUnsubscribing, "purge_too_late": core.ErrPurgeTooLate,
+		"gpg_not_found": core.ErrGPGNotFound, "openpgp_no_key": core.ErrOpenPGPNoKey, "openpgp_downgrade": core.ErrOpenPGPDowngrade,
 		"auth_failed": backend.ErrAuthFailed, "oauth_not_configured": auth.ErrOAuthNotConfigured,
 		"flow_expired": auth.ErrFlowExpired, "invalid_grant": auth.ErrInvalidGrant, "access_denied": auth.ErrAccessDenied,
 		"scope_missing":            auth.ErrScopeMissing,
@@ -346,8 +347,10 @@ func TestWireCodesPinned(t *testing.T) {
 		"ai_error":                 &ai.Error{Code: ai.CodeCanceled},
 		"no_role_folder":           &core.ErrNoRoleFolder{Role: "junk"},
 		"model_error":              &core.ModelError{Code: "model_not_ready"},
+		"openpgp_failed":           &core.OpenPGPError{Op: "signing", Message: "Operation cancelled"},
+		"openpgp_keys_missing":     &core.OpenPGPKeysMissingError{Addresses: []string{"carol@example.com"}},
 	}
-	assert.Len(t, pinned, len(sentinels())+7, "every registration is pinned")
+	assert.Len(t, pinned, len(sentinels())+9, "every registration is pinned")
 	for code, err := range pinned {
 		we := c.Encode(err, nil)
 		assert.Equal(t, rpc.CodeApp, we.Code, code)
@@ -359,7 +362,7 @@ func TestWireCodesPinned(t *testing.T) {
 // or partial business error.
 func TestBadErrorData(t *testing.T) {
 	c := rpcbind.NewCodec()
-	for _, code := range []string{"check_failed", "send_warnings", "send_blocked", "egress_approval_required", "ai_error", "no_role_folder", "model_error"} {
+	for _, code := range []string{"check_failed", "send_warnings", "send_blocked", "egress_approval_required", "ai_error", "no_role_folder", "model_error", "openpgp_failed", "openpgp_keys_missing"} {
 		for name, detail := range map[string]string{"missing": ``, "wrong type": `{"Plugin":1,"Steps":1,"Code":1}`, "partial": `{}`} {
 			got := c.Decode(&rpc.WireError{Code: rpc.CodeApp, Message: "m", Data: &rpc.WireErrorData{Code: code, Detail: json.RawMessage(detail)}})
 			assert.ErrorIs(t, got, rpc.ErrBadErrorData, "%s %s", code, name)

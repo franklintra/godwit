@@ -130,6 +130,9 @@ var table = []Error{
 	{Code: "unsubscribe_web", Err: core.ErrUnsubscribeWeb},
 	{Code: "unsubscribing", Err: core.ErrUnsubscribing},
 	{Code: "purge_too_late", Err: core.ErrPurgeTooLate, Key: "mail.purge.too_late"},
+	{Code: "gpg_not_found", Err: core.ErrGPGNotFound},
+	{Code: "openpgp_no_key", Err: core.ErrOpenPGPNoKey},
+	{Code: "openpgp_downgrade", Err: core.ErrOpenPGPDowngrade},
 	{Code: "canceled", Err: context.Canceled},
 	{Code: "deadline", Err: context.DeadlineExceeded},
 	{Code: "auth_failed", Err: backend.ErrAuthFailed, Key: "settings.account.detail.auth_rejected"}, // also a failed account check's cause; the account's own words for it
@@ -196,6 +199,12 @@ func NewCodec() *rpc.Codec {
 			return core.EgressApprovalRequired{Plugin: e.Plugin, Hosts: e.Hosts}
 		},
 		rpc.DecodeDetail[core.EgressApprovalRequired])
+	rpc.RegisterType(c, "openpgp_failed",
+		func(e *core.OpenPGPError) any { return *e },
+		rpc.DecodeDetail[core.OpenPGPError])
+	rpc.RegisterType(c, "openpgp_keys_missing",
+		func(e *core.OpenPGPKeysMissingError) any { return *e },
+		rpc.DecodeDetail[core.OpenPGPKeysMissingError])
 	rpc.RegisterType(c, "no_role_folder",
 		func(e *core.ErrNoRoleFolder) any { return *e },
 		rpc.DecodeDetail[core.ErrNoRoleFolder])
@@ -286,6 +295,9 @@ var uiOnly = map[string]bool{
 	"ThreadDeadline": true,
 	// 撤销 after the user sets, changes or removes a 回复日期: it writes any source's row past setDeadline's checks.
 	"UndoSetThreadDeadline": true,
+	// OpenPGP (ADR 0045): the gpg binary Godwit runs is chosen only in its interface, and a
+	// received message decrypted by the user's gpg goes only to its reader.
+	"SetGPGPath": true, "OpenPGPMessage": true,
 	// 收到就总结's controls on AI 功能: going on with a new model service and summarizing the
 	// last 30 days' unreplied mail send mail to a model unattended, so only the user's click
 	// gives them; the two reads only feed those controls.

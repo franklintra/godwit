@@ -216,6 +216,9 @@ type PGPMIME struct {
 	Signed, Signature []byte
 	// Encrypted is the OpenPGP message of an encrypted one.
 	Encrypted []byte
+	// Whole: it is the message itself, not one part of it among others (a
+	// mailing list's footer added after signing, say).
+	Whole bool
 }
 
 // FindPGPMIME returns the first PGP/MIME signed or encrypted entity of raw,
@@ -249,7 +252,7 @@ func findPGPMIME(e []byte, depth int) (*PGPMIME, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &PGPMIME{Kind: "signed", Signed: parts[0], Signature: sig}, nil
+		return &PGPMIME{Kind: "signed", Signed: parts[0], Signature: sig, Whole: depth == 0}, nil
 	case ct == "multipart/encrypted" && protocol == "application/pgp-encrypted":
 		if len(parts) != 2 {
 			return nil, fmt.Errorf("openpgp: an encrypted message has %d parts, not 2", len(parts))
@@ -259,7 +262,7 @@ func findPGPMIME(e []byte, depth int) (*PGPMIME, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &PGPMIME{Kind: "encrypted", Encrypted: data}, nil
+		return &PGPMIME{Kind: "encrypted", Encrypted: data, Whole: depth == 0}, nil
 	}
 	for _, p := range parts {
 		if found, err := findPGPMIME(p, depth+1); found != nil || err != nil {
@@ -359,6 +362,8 @@ type InlinePGP struct {
 	// line to its END line, CRLF lines.
 	Block   []byte
 	Charset string // the part's charset, for the text a block holds
+	// Whole: the block is all the message's text, nothing around it.
+	Whole bool
 }
 
 // FindInlinePGP returns the first inline OpenPGP block in a text/plain part
@@ -395,7 +400,8 @@ func findInline(e []byte, depth int) (*InlinePGP, error) {
 	text = canonicalCRLF(text)
 	for _, k := range []struct{ kind, begin, end string }{{"signed", armorSigned, armorSignatureEnd}, {"message", armorMessage, armorMessageEnd}} {
 		if b := armorBlock(text, k.begin, k.end); b != nil {
-			return &InlinePGP{Kind: k.kind, Block: b, Charset: params["charset"]}, nil
+			whole := depth == 0 && bytes.Equal(bytes.TrimSpace(b), bytes.TrimSpace(text))
+			return &InlinePGP{Kind: k.kind, Block: b, Charset: params["charset"], Whole: whole}, nil
 		}
 	}
 	return nil, nil

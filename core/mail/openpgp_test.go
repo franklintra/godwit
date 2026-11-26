@@ -53,6 +53,7 @@ func TestBuildSigned(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, p)
 	assert.Equal(t, "signed", p.Kind)
+	assert.True(t, p.Whole)
 	assert.Equal(t, signed, p.Signed)
 	assert.Equal(t, "-----BEGIN PGP SIGNATURE-----\r\n\r\nfake\r\n-----END PGP SIGNATURE-----", string(p.Signature))
 
@@ -170,6 +171,7 @@ func TestFindPGPMIMENested(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, p)
 	assert.Equal(t, "Content-Type: text/plain\r\n\r\nsigned text", string(p.Signed))
+	assert.False(t, p.Whole, "a footer was added outside the signature")
 	assert.Equal(t, "SIG", string(p.Signature))
 
 	none, err := mail.FindPGPMIME([]byte("From: a@x\r\nContent-Type: text/plain\r\n\r\nhi\r\n"))
@@ -199,6 +201,7 @@ func TestFindInlinePGP(t *testing.T) {
 	require.NotNil(t, p)
 	assert.Equal(t, "signed", p.Kind)
 	assert.Equal(t, "iso-8859-1", p.Charset)
+	assert.False(t, p.Whole)
 	// Decoded from quoted-printable, but still in its own charset: what was signed.
 	assert.Equal(t, strings.Replace(block, "Caf=E9", "Caf\xe9", 1), string(p.Block))
 
@@ -207,6 +210,7 @@ func TestFindInlinePGP(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, p)
 	assert.Equal(t, "message", p.Kind)
+	assert.True(t, p.Whole)
 
 	// Quoted in a reply, not at a line start: not a block.
 	p, err = mail.FindInlinePGP([]byte("Content-Type: text/plain\r\n\r\n> -----BEGIN PGP MESSAGE-----\r\n> x\r\n> -----END PGP MESSAGE-----\r\n"))

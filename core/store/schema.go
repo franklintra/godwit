@@ -902,6 +902,18 @@ var Migrations = [][]string{{
 	// before, which compare by set_at and archived_at.
 	`ALTER TABLE thread_deadlines ADD COLUMN set_version INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE archive_marks ADD COLUMN archived_version INTEGER NOT NULL DEFAULT 0`,
+}, {
+	// OpenPGP through the user's GnuPG (ADR 0045): the secret key an account
+	// signs with (its fingerprint; '' none) and its defaults for new drafts,
+	// and a draft's own choices, NULL while it follows its account's.
+	// openpgp_encrypt is off, auto or on.
+	`CREATE TABLE account_openpgp (
+		account_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+		key_fpr TEXT NOT NULL DEFAULT '',
+		sign INTEGER NOT NULL DEFAULT 0,
+		encrypt INTEGER NOT NULL DEFAULT 0)`,
+	`ALTER TABLE drafts ADD COLUMN openpgp_sign INTEGER`,
+	`ALTER TABLE drafts ADD COLUMN openpgp_encrypt TEXT`,
 }}
 
 // HistoryRowsVersion is the schema version that keeps a conversation's

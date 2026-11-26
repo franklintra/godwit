@@ -5,6 +5,7 @@
 # interface needs it, add it to uiOnly in bind.go (ui_methods.txt); if it
 # should not be on the wire at all, add it to hidden there instead.
 AccountIcon
+AccountOpenPGP
 AddAccount
 AddAddressBook
 AddAttachment
@@ -128,6 +129,9 @@ MoveToRole
 NewConversation
 NewDraft
 NewMailtoDraft
+OpenPGPKeys
+OpenPGPRecipientKeys
+OpenPGPStatus
 PendingLabels
 PendingMCPSends
 PendingOps
@@ -202,10 +206,12 @@ Send
 SendAcknowledged
 SendAcknowledgedRevision
 SendRevision
+SetAccountOpenPGP
 SetAddressBookCollectionEnabled
 SetConversationModel
 SetDraftAccount
 SetDraftModel
+SetDraftOpenPGP
 SetFlags
 SetLabel
 SetMCPServerEnabled

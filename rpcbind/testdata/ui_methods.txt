@@ -20,6 +20,7 @@ InboxOnly
 InlineImagesStream
 InstallPluginFromRegistryStream
 ModelServiceAvatar
+OpenPGPMessage
 PluginReadme
 PrepareModelStream
 PreviewAccountImportFile
@@ -30,6 +31,7 @@ ReplaceUIBackend
 SendLater
 SenderAvatar
 SetComposeOpen
+SetGPGPath
 SetInboxOnly
 SetTimeZone
 SetUIForeground
