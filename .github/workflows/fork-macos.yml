@@ -1,0 +1,55 @@
+# Fork only (FORK.md): an unsigned, ad-hoc signed Godwit.app for Apple
+# silicon from franklin/integration, kept as a workflow artifact. No
+# secrets, no notarization, no upload to dl.godwit.email.
+name: Fork macOS build
+
+on:
+  push:
+    branches: [franklin/integration]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  app:
+    if: github.repository != 'godwit-email/godwit'
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+      - id: go-cache
+        run: echo "dir=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v6
+        with:
+          path: ${{ steps.go-cache.outputs.dir }}
+          key: fork-macos-gocache-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            fork-macos-gocache-
+      # The same steps as ci.yml's package job, for one architecture and
+      # without the DMG: MyGo signs ad hoc when MACOS_SIGNING_IDENTITY is unset.
+      - run: mise run web:install
+      - run: mise run native:translate
+      - run: mise run native:apple-intelligence
+      - run: mise run native:guard-coreml
+      - run: go tool mygo build -platform darwin/arm64 -skip-dmg -skip-notarize
+      - name: Zip Godwit.app
+        id: zip
+        run: |
+          app=$(find dist -maxdepth 3 -name 'Godwit.app' -type d | head -1)
+          test -n "$app" || { find dist -maxdepth 3; echo "no Godwit.app in dist" >&2; exit 1; }
+          codesign -dv "$app" 2>&1 | sed -n '1,8p'
+          go version -m "$app/Contents/MacOS/"* 2>/dev/null | grep -E 'vcs\.(revision|modified)' || true
+          ditto -c -k --keepParent "$app" "$RUNNER_TEMP/Godwit-macOS-arm64.zip"
+          echo "zip=$RUNNER_TEMP/Godwit-macOS-arm64.zip" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Godwit-macOS-arm64-${{ github.sha }}
+          path: ${{ steps.zip.outputs.zip }}
+          if-no-files-found: error
+          retention-days: 14
