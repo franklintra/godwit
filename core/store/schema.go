@@ -910,7 +910,7 @@ var Migrations = [][]string{{
 	// address (Disposition-Notification-To).
 	`ALTER TABLE drafts ADD COLUMN read_receipt INTEGER NOT NULL DEFAULT 0`,
 }, {
-	// Server drafts (ADR 0045): 1 keeps the account's drafts in its Drafts
+	// Server drafts (ADR 0047): 1 keeps the account's drafts in its Drafts
 	// folder as well as here.
 	`ALTER TABLE accounts ADD COLUMN server_drafts INTEGER NOT NULL DEFAULT 0`,
 	// One row per copy of a draft in a Drafts folder that Godwit stored or

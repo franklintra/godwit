@@ -59,7 +59,7 @@ type Account struct {
 	AIInstructions                          string // the user's facts and guidelines for Wit drafting from this account
 	IsDefault                               bool
 	LabelKeywords                           bool // labels and the server's IMAP keywords follow each other (ADR 0035)
-	ServerDrafts                            bool // its drafts are kept in its Drafts folder too, for other apps to see and change (ADR 0045)
+	ServerDrafts                            bool // its drafts are kept in its Drafts folder too, for other apps to see and change (ADR 0047)
 	Sync                                    SyncRange
 	Folders                                 int // folders synced so far: 0 before the first sync
 	AuthType, Status                        string

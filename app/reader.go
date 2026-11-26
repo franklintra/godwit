@@ -800,7 +800,7 @@ func (a *App) draft(m core.MessageSummary, acc int64, mode string) {
 }
 
 // inServerDrafts reports whether m is in a Drafts folder on its server: a
-// draft another app saved, which 编辑草稿 makes a Godwit draft (ADR 0045).
+// draft another app saved, which 编辑草稿 makes a Godwit draft (ADR 0047).
 func (r *reader) inServerDrafts(m core.MessageSummary) bool {
 	return slices.ContainsFunc(m.FolderIDs, func(id int64) bool {
 		f, ok := r.p.folder(id)

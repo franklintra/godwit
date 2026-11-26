@@ -25,7 +25,7 @@ const (
 	AddressBooksChanged = "address_books.changed" // address books, collections, order or synced cards changed
 	DraftsChanged       = "drafts.changed"        // a program created or changed a draft (ADR 0043)
 	// DraftConflict: a server draft of AccountID changed both here and in
-	// another app, or another app removed it (ADR 0045); Kind says which:
+	// another app, or another app removed it (ADR 0047); Kind says which:
 	// server_newer, local_newer or server_gone.
 	DraftConflict = "drafts.conflict"
 	// NotificationClicked: the backend got a click on notification Notification

@@ -285,7 +285,7 @@ var uiOnly = map[string]bool{
 	// 批准并发送 on a program's draft (ADR 0043): the approval stands for the user's click,
 	// so no program may give it. It sends nothing SendRevision could not.
 	"ApproveDraft": true,
-	// A closed compose window's draft goes to the server at once (ADR 0045); programs' drafts
+	// A closed compose window's draft goes to the server at once (ADR 0047); programs' drafts
 	// follow ServerDraftIdle like any other.
 	"FlushServerDraft": true,
 	// Settings' 全部去掉 for other apps' and Wit's reply dates, the user's way out when an agent

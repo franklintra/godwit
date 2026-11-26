@@ -13,7 +13,7 @@ import (
 
 // networkView is 网络隐私: every connection Godwit makes by itself, each row
 // naming where it goes, with the switch that stops it; then remote images
-// and the proxy, set on their own pages (docs/adr/0045-network-privacy-switches.md).
+// and the proxy, set on their own pages (docs/adr/0046-network-privacy-switches.md).
 func (p *settingsPage) networkView(c *ui.Context) {
 	sw := func(on *bool, title, help string) func() {
 		return func() {

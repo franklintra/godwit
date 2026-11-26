@@ -176,7 +176,7 @@ func (a *App) onEvent(ev events.Event) {
 		a.tick() // a failure that lasts turns red
 	case events.OutboxChanged:
 		a.offerUndo()
-	case events.DraftConflict: // a server draft changed in another app too (ADR 0045)
+	case events.DraftConflict: // a server draft changed in another app too (ADR 0047)
 		a.toastAs(kit.ToastWarning, i18n.T("mail.draft.conflict."+ev.Kind))
 	case events.PluginsChanged: // a card's plugin may have been switched
 		a.mail.reader.reloadPluginParts()

@@ -4,7 +4,7 @@ package core
 // itself (Settings.ModelCatalog, PluginRegistry, Gravatar, Favicons, BIMI;
 // UpdateChecks is the app's), kept in memory so a background loop or an
 // avatar reads no database, and the client those connections take through
-// the user's proxy (docs/adr/0045-network-privacy-switches.md).
+// the user's proxy (docs/adr/0046-network-privacy-switches.md).
 
 import (
 	"context"

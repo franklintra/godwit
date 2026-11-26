@@ -23,7 +23,7 @@ import (
 	"github.com/godwit-email/godwit/core/store"
 )
 
-// Server drafts (ADR 0045): an account with ServerDrafts keeps a copy of each
+// Server drafts (ADR 0047): an account with ServerDrafts keeps a copy of each
 // of its drafts in its Drafts folder, so other mail apps and tools see it. The
 // draft stays the local row it always was; the copy follows it. A sync round
 // stores a copy once the draft has been left unchanged for ServerDraftIdle,
