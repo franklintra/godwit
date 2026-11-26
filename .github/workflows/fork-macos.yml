@@ -24,7 +24,7 @@ jobs:
       - run: echo "hosted runners start"
   app:
     if: github.repository != 'godwit-email/godwit'
-    # Two images: hosted macOS arm64 runners are often short, so the first
+    # Several images: hosted macOS arm64 runners are often short, so the first
     # to get one wins; each uploads. The arm64 pool found none for 15 minutes,
     # twice, so an Intel image cross-builds the arm64 app too.
     strategy:
@@ -46,6 +46,14 @@ jobs:
             fork-macos-gocache-${{ matrix.os }}-
       # The same steps as ci.yml's package job, for one architecture and
       # without the DMG: MyGo signs ad hoc when MACOS_SIGNING_IDENTITY is unset.
+      # The native helpers need the macOS 26 SDK (Translation, Foundation
+      # Models): pick the newest Xcode the image has.
+      - name: Select the newest Xcode
+        run: |
+          ls -d /Applications/Xcode*.app
+          latest=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
+          if [ -n "$latest" ]; then sudo xcode-select -s "$latest"; fi
+          xcodebuild -version
       - run: mise run web:install
       - run: mise run native:translate
       - run: mise run native:apple-intelligence
