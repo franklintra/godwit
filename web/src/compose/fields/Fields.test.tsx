@@ -8,8 +8,8 @@ import { Fields, type FieldsEdit, type FieldsHandle } from "./Fields";
 const t = makeT("zh-Hans");
 
 const accounts = [
-  { id: 1, email: "me@x.com" },
-  { id: 2, email: "work@x.com" },
+  { id: 1, email: "me@x.com", identities: [{ id: 5, name: "Belcova", email: "contact@x.com" }] },
+  { id: 2, email: "work@x.com", identities: [] },
 ];
 
 type Init = Partial<Record<"to" | "cc" | "bcc", string[]> & { replyTo: string }>;
@@ -27,7 +27,7 @@ function Host({
   frozen: boolean;
   onSearch?: (q: string) => Promise<ContactHit[]>;
   onChange: (e: FieldsEdit) => void;
-  onFrom: (id: number) => void;
+  onFrom: (account: number, identity: number) => void;
   fieldsRef: Ref<FieldsHandle>;
 }) {
   const [v, setV] = useState({ to: [], cc: [], bcc: [], replyTo: "", subject: "", ...init });
@@ -153,12 +153,56 @@ test("choosing another account calls onFrom", async () => {
   expect(from).toHaveTextContent("me@x.com"); // the pill shows the current account
   pick = "work@x.com";
   await userEvent.click(from);
-  // the system's menu lists the accounts as a run of radio items, the one in use checked
+  // the system's menu lists the accounts, each followed by its identities, as a run of radio
+  // items, the one in use checked
   expect(menu.mock.lastCall?.[0]).toEqual([
-    { id: "1", label: "me@x.com", radio: true, checked: true },
-    { id: "2", label: "work@x.com", radio: true, checked: false },
+    { id: "1:0", label: "me@x.com", radio: true, checked: true },
+    { id: "1:5", label: "Belcova <contact@x.com>", radio: true, checked: false },
+    { id: "", label: "", separator: true },
+    { id: "2:0", label: "work@x.com", radio: true, checked: false },
   ]);
-  expect(onFrom).toHaveBeenCalledWith(2);
+  expect(onFrom).toHaveBeenCalledWith(2, 0);
+});
+
+test("choosing an identity calls onFrom with it; the pill shows its address", async () => {
+  const onFrom = vi.fn();
+  const { rerender } = render(
+    <Fields
+      accounts={accounts}
+      from={1}
+      onFrom={onFrom}
+      menu={menu}
+      to={[]}
+      cc={[]}
+      bcc={[]}
+      replyTo=""
+      subject=""
+      onChange={vi.fn()}
+      t={t}
+    />,
+  );
+  pick = "Belcova <contact@x.com>";
+  await userEvent.click(screen.getByRole("button", { name: "发件账户" }));
+  expect(onFrom).toHaveBeenCalledWith(1, 5);
+  rerender(
+    <Fields
+      accounts={accounts}
+      from={1}
+      identity={5}
+      onFrom={onFrom}
+      menu={menu}
+      to={[]}
+      cc={[]}
+      bcc={[]}
+      replyTo=""
+      subject=""
+      onChange={vi.fn()}
+      t={t}
+    />,
+  );
+  const pill = screen.getByRole("button", { name: "发件账户" });
+  expect(pill).toHaveTextContent("contact@x.com");
+  expect(pill).toHaveAttribute("title", "Belcova <contact@x.com>");
 });
 
 test("subject edits", async () => {

@@ -36,7 +36,12 @@ export function fromEntries(accounts: Account[], from: number, identity: number)
   for (const a of accounts) {
     const ids = a.identities ?? [];
     if (ids.length > 0 && out.length > 0) out.push(separator);
-    out.push({ id: `${a.id}:0`, label: a.email, radio: true, checked: a.id === from && identity === 0 });
+    out.push({
+      id: `${a.id}:0`,
+      label: a.email,
+      radio: true,
+      checked: a.id === from && identity === 0,
+    });
     for (const i of ids) {
       out.push({
         id: `${a.id}:${i.id}`,
@@ -55,7 +60,10 @@ export function fromEntries(accounts: Account[], from: number, identity: number)
 export function fromAddress(accounts: Account[], from: number, identity: number) {
   const a = accounts.find((x) => x.id === from);
   const i = identity ? a?.identities?.find((x) => x.id === identity) : undefined;
-  return { email: i?.email ?? a?.email, title: i?.name ? `${i.name} <${i.email}>` : (i?.email ?? a?.email) };
+  return {
+    email: i?.email ?? a?.email,
+    title: i?.name ? `${i.name} <${i.email}>` : (i?.email ?? a?.email),
+  };
 }
 
 /**
@@ -235,7 +243,11 @@ export function Fields({
           disabled={frozen}
           className="flex h-6 min-w-0 items-center gap-1 rounded-md bg-(--hover-tint) px-2 font-medium text-xs transition-colors hover:bg-(--tint-2) focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50"
           onClick={async (e) => {
-            const chosen = await popupUnder(menu, e.currentTarget, fromEntries(accounts, from, identity));
+            const chosen = await popupUnder(
+              menu,
+              e.currentTarget,
+              fromEntries(accounts, from, identity),
+            );
             if (!chosen || frozenNow.current) return;
             const [account, ident] = chosen.split(":").map(Number);
             if (account !== from || ident !== identity) onFrom(account, ident);
