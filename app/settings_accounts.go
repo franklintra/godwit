@@ -297,6 +297,15 @@ func (p *settingsPage) setLabelKeywords(id int64, on bool) {
 	p.patch(id, core.AccountPatch{LabelKeywords: &on}, nil)
 }
 
+func (p *settingsPage) setServerDrafts(id int64, on bool) {
+	for i := range p.a.accounts {
+		if p.a.accounts[i].ID == id {
+			p.a.accounts[i].ServerDrafts = on
+		}
+	}
+	p.patch(id, core.AccountPatch{ServerDrafts: &on}, nil)
+}
+
 func (p *settingsPage) setSync(id int64, f *accountForm) {
 	r := f.sync
 	f.syncBusy++
@@ -574,6 +583,15 @@ func (p *settingsPage) accountView(c *ui.Context, acc core.Account) {
 			on := acc.LabelKeywords
 			if kit.FieldWith(c, kit.FieldOpts{Horizontal: true, Switch: &on}, i18n.T("settings.account.label_keywords"), i18n.T("settings.account.label_keywords.help"), "", nil).Changed() {
 				p.setLabelKeywords(acc.ID, on)
+			}
+		},
+		func() {
+			if acc.Receiving.Protocol == auth.POP3 { // an inbox only: no Drafts folder to keep them in
+				return
+			}
+			on := acc.ServerDrafts
+			if kit.FieldWith(c, kit.FieldOpts{Horizontal: true, Switch: &on}, i18n.T("settings.account.server_drafts"), i18n.T("settings.account.server_drafts.help"), "", nil).Changed() {
+				p.setServerDrafts(acc.ID, on)
 			}
 		},
 		row(i18n.T("settings.account.usage"), i18n.T("settings.account.usage.help"), func() ui.Element {

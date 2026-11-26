@@ -94,6 +94,7 @@ func (s *Service) SetDraftAccount(ctx context.Context, id, accountID, revision i
 		return Draft{}, fmt.Errorf("draft %d changed or was deleted meanwhile", id)
 	}
 	s.programChanged(ctx, nil)
+	s.draftChanged(ctx, id)
 	return s.GetDraft(ctx, id)
 }
 

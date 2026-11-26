@@ -434,15 +434,15 @@ func (s *Service) ImportAccounts(ctx context.Context, data []byte) (AccountImpor
 
 		stmts = append(stmts, sqlite.Statement{
 			SQL: `INSERT INTO accounts(email, name, alias, is_default, sync_limit, sync_since_months, recv_auth, send_auth, status, status_detail, username,
-				recv_protocol, recv_host, recv_port, recv_security, recv_path, send_protocol, send_host, send_port, send_security, created_at, provider, oauth_client_id, features, receive_only, ai_instructions, label_keywords, signature_id, position)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'reauth_required', 'credentials_missing', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, (SELECT COALESCE(MAX(position) + 1, 0) FROM accounts))`,
+				recv_protocol, recv_host, recv_port, recv_security, recv_path, send_protocol, send_host, send_port, send_security, created_at, provider, oauth_client_id, features, receive_only, ai_instructions, label_keywords, server_drafts, signature_id, position)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'reauth_required', 'credentials_missing', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(position) + 1, 0) FROM accounts))`,
 			Args: []any{
 				ea.Email, ea.Name, ea.Alias, b2i(i == defaultIdx), ea.Sync.Limit, ea.Sync.Months,
 				ea.Receiving.Auth, ea.Sending.Auth, ea.Username,
 				ea.Receiving.Protocol, ea.Receiving.Host, ea.Receiving.Port, string(ea.Receiving.Security), ea.Receiving.Path,
 				ea.Sending.Protocol, ea.Sending.Host, ea.Sending.Port, string(ea.Sending.Security),
 				now, ea.Provider, ea.OAuthClientID, b2i(ea.ReceiveOnly),
-				ea.AIInstructions, b2i(ea.LabelKeywords), sigID,
+				ea.AIInstructions, b2i(ea.LabelKeywords), b2i(ea.ServerDrafts), sigID,
 			},
 		})
 		insertIdxs = append(insertIdxs, len(stmts)-1)

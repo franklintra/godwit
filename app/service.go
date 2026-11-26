@@ -110,6 +110,7 @@ type Service interface {
 	MoveToRole(ctx context.Context, ids []int64, role string) error
 	NewDraft(ctx context.Context, accountID int64, mode string, sourceMessageID int64) (core.Draft, error)
 	NewMailtoDraft(ctx context.Context, accountID int64, link string) (core.Draft, error)
+	OpenServerDraft(ctx context.Context, messageID int64) (int64, error)
 	PendingLabels(ctx context.Context) (int, error)
 	PendingMCPSends(ctx context.Context) ([]core.MCPSend, error)
 	PluginCards(ctx context.Context, messageID int64) ([]core.Card, error)

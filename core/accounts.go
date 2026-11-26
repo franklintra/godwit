@@ -500,7 +500,7 @@ func b2i(b bool) int {
 const accountCols = `id, email, name, alias, COALESCE((SELECT html FROM signatures WHERE id = signature_id), ''), username, is_default, sync_limit, recv_auth, status,
 	recv_host, recv_port, recv_security, send_host, send_port, send_security, smtp_reauth, provider, status_detail,
 	sync_since_months, (SELECT count(*) FROM folders WHERE account_id = accounts.id), signature_id, icon, ai_instructions, oauth_client_id, label_keywords, kind, receive_only,
-	recv_protocol, send_protocol, features, recv_path, send_auth, position`
+	recv_protocol, send_protocol, features, recv_path, send_auth, position, server_drafts`
 
 // ErrAccountNotFound is returned for an account id that does not exist.
 var ErrAccountNotFound = errors.New("account not found")
@@ -529,7 +529,7 @@ func scanAccount(r []any) Account {
 		Sending:   Server{store.Str(r[29]), store.Str(r[13]), int(store.Int(r[14])), Security(store.Str(r[15])), "", store.Str(r[32])},
 		Provider:  store.Str(r[17]), StatusDetail: store.Str(r[18]), SignatureID: store.Int(r[21]), Icon: store.Str(r[22]),
 		AIInstructions: store.Str(r[23]), OAuthClientID: store.Str(r[24]), LabelKeywords: store.Int(r[25]) == 1, Kind: store.Str(r[26]),
-		ReceiveOnly: store.Int(r[27]) == 1, Position: int(store.Int(r[33])),
+		ReceiveOnly: store.Int(r[27]) == 1, Position: int(store.Int(r[33])), ServerDrafts: store.Int(r[34]) == 1,
 	}
 	if sendsViaReceiving(a.Receiving.Protocol) {
 		// EWS, JMAP, Graph and Gmail API send through the receiving server, whose
@@ -883,6 +883,9 @@ func (s *Service) UpdateAccount(ctx context.Context, id int64, p AccountPatch) (
 	if p.LabelKeywords != nil {
 		set("label_keywords", b2i(*p.LabelKeywords))
 	}
+	if p.ServerDrafts != nil {
+		set("server_drafts", b2i(*p.ServerDrafts))
+	}
 	var iconStmts []sqlite.Statement
 	switch {
 	case p.IconImage != nil:
@@ -1001,8 +1004,8 @@ func (s *Service) UpdateAccount(ctx context.Context, id int64, p AccountPatch) (
 	if err != nil {
 		return Account{}, err
 	}
-	if p.Servers != nil || p.Sync != nil {
-		s.wakeWorker(id) // the next round dials the new servers or backfills
+	if p.Servers != nil || p.Sync != nil || p.ServerDrafts != nil && *p.ServerDrafts && !acc.ServerDrafts {
+		s.wakeWorker(id) // the next round dials the new servers, backfills or stores the drafts
 	}
 	if p.LabelKeywords != nil && *p.LabelKeywords && !acc.LabelKeywords { // the keywords already synced show at once
 		if err := s.importKeywordLabels(ctx, id); err != nil {

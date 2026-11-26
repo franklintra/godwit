@@ -261,6 +261,9 @@ type Service struct {
 	registryMu        sync.Mutex         // registry cache writes; registryErr
 	registryErr       string             // why the last registry refresh failed; "" it did not
 
+	serverDraftMu    sync.Mutex // server_drafts decisions: a sync's server drafts step, a take-over; before editMu
+	serverDraftFlush sync.Map   // draft IDs (int64) to store at the next round, without waiting ServerDraftIdle
+
 	catalog     atomic.Pointer[ai.ModelCatalog] // models.dev's (modelcatalog.go); nil knows none
 	catalogTry  atomic.Int64                    // when a fetch last started, Unix nanoseconds
 	catalogBusy atomic.Bool                     // a fetch is running
@@ -963,6 +966,13 @@ func (s *Service) syncAccount(ctx context.Context, accountID int64, explicit boo
 	// Ops that waited for a move's claim can go now; ones already tried are not retried.
 	if err := s.pushOps(ctx, recv, accountID, mailsync.PushNewOps); err != nil {
 		return err
+	}
+	// After the fetch, which shows what other apps did in the Drafts folder.
+	if err := s.syncServerDrafts(ctx, recv, accountID); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		slog.Warn("server drafts not synced", "account", accountID, "err", err)
 	}
 	if useSMTP && smtpErr == nil && !folders {
 		smtpErr = s.processOutbox(ctx, recv, accountID, explicit)

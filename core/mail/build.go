@@ -32,6 +32,9 @@ type Outgoing struct {
 	// ReadReceipt asks the recipients' clients for a read receipt
 	// (Disposition-Notification-To, RFC 8098), always to From.
 	ReadReceipt bool
+	// Draft builds a copy for the Drafts folder, not mail to send: Bcc is
+	// written to the header, where other mail apps read it back.
+	Draft bool
 }
 
 // RuleHeader marks mail a Godwit rule forwarded; mail carrying it is never
@@ -51,8 +54,8 @@ func addrList(in []string) ([]*gomail.Address, error) {
 }
 
 // Build renders o as RFC 5322 bytes. Bcc is never written to the headers (the
-// sender uses it only as envelope recipients). messageID is returned without
-// angle brackets, matching Parsed.MessageID.
+// sender uses it only as envelope recipients), unless o is a Draft.
+// messageID is returned without angle brackets, matching Parsed.MessageID.
 func Build(o Outgoing, now time.Time) (raw []byte, messageID string, err error) {
 	from, err := gomail.ParseAddress(o.From)
 	if err != nil {
@@ -89,7 +92,7 @@ func Build(o Outgoing, now time.Time) (raw []byte, messageID string, err error) 
 	for _, f := range []struct {
 		key string
 		v   []string
-	}{{"To", o.To}, {"Cc", o.Cc}, {"Reply-To", nonEmpty(o.ReplyTo)}} {
+	}{{"To", o.To}, {"Cc", o.Cc}, {"Bcc", draftOnly(o.Draft, o.Bcc)}, {"Reply-To", nonEmpty(o.ReplyTo)}} {
 		l, err := addrList(f.v)
 		if err != nil {
 			return nil, "", err
@@ -231,6 +234,14 @@ func nonEmpty(s string) []string {
 		return nil
 	}
 	return []string{s}
+}
+
+// draftOnly is l for a draft's copy, nil for mail to send.
+func draftOnly(draft bool, l []string) []string {
+	if draft {
+		return l
+	}
+	return nil
 }
 
 // VisibleText is HTMLToText of what the reader shows of src, a body as

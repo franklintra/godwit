@@ -353,7 +353,12 @@ func (s *Service) programChanged(ctx context.Context, err error) {
 
 // saveDraft is SaveDraft, unaudited.
 func (s *Service) saveDraft(ctx context.Context, d Draft) (out Draft, err error) {
-	defer func() { s.programChanged(ctx, err) }()
+	defer func() {
+		s.programChanged(ctx, err)
+		if err == nil {
+			s.draftChanged(ctx, out.ID)
+		}
+	}()
 	// Draft changes and Send never interleave.
 	s.editMu.Lock()
 	defer s.editMu.Unlock()
@@ -543,6 +548,7 @@ func (s *Service) addAttachment(ctx context.Context, draftID, rev int64, filenam
 	}
 	now, err := s.draftRevision(ctx, draftID)
 	s.programChanged(ctx, err)
+	s.draftChanged(ctx, draftID)
 	return DraftAttachment{ID: id, Filename: filename, ContentType: contentType, Size: len(data)}, now, err
 }
 
@@ -609,6 +615,7 @@ func (s *Service) removeAttachment(ctx context.Context, draftID, attachmentID, r
 		return 0, err
 	}
 	s.programChanged(ctx, nil) // removed: the file left behind changes nothing shown
+	s.draftChanged(ctx, draftID)
 	if err := os.Remove(store.Str(rows.Values[0][0])); err != nil && !os.IsNotExist(err) {
 		return 0, err
 	}
@@ -616,14 +623,58 @@ func (s *Service) removeAttachment(ctx context.Context, draftID, attachmentID, r
 }
 
 func (s *Service) deleteDraft(ctx context.Context, id int64) error {
-	r, err := s.db.DurableExecute(ctx, "DELETE FROM drafts WHERE id = ?", id) // attachments cascade
+	copies := s.serverDraftAccounts(ctx, id)
+	r, err := s.db.DurableExecute(ctx, "DELETE FROM drafts WHERE id = ?", id) // attachments cascade; server copies are let go
 	if err != nil {
 		return err
 	}
 	if r.Changes == 0 {
 		return fmt.Errorf("draft %d not found", id)
 	}
+	s.serverDraftFlush.Delete(id)
+	s.draftGone(copies)
 	return os.RemoveAll(s.draftDir(id))
+}
+
+// threadHeaders sets o's In-Reply-To and References for a reply or forward
+// draft d, as its message is sent, and returns the source's Message-ID ("" for
+// none: a new draft, or a source gone or without one).
+func (s *Service) threadHeaders(ctx context.Context, d Draft, o *mail.Outgoing) (string, error) {
+	if d.SourceMessageID == 0 || d.Mode != "reply" && d.Mode != "reply_all" && d.Mode != "forward" {
+		return "", nil
+	}
+	rows, err := s.db.Query(ctx, "SELECT message_id, refs FROM messages WHERE id = ?", d.SourceMessageID)
+	if err != nil || len(rows.Values) == 0 || store.Str(rows.Values[0][0]) == "" {
+		return "", err
+	}
+	id := store.Str(rows.Values[0][0])
+	if d.Mode == "forward" {
+		// A forward is not a reply (RFC 5322 3.6.4), and its recipient may be new
+		// to the thread: the original's ID keeps it in the conversation without
+		// listing the earlier mail's. GetThread recognizes a forward by this shape.
+		o.References = []string{id}
+	} else {
+		o.InReplyTo = id
+		o.References = append(strings.Fields(store.Str(rows.Values[0][1])), id)
+	}
+	return id, nil
+}
+
+// draftFiles reads the draft's attachments from its directory.
+func (s *Service) draftFiles(ctx context.Context, draftID int64) ([]mail.Attachment, error) {
+	atts, err := s.db.Query(ctx, "SELECT filename, content_type, path FROM draft_attachments WHERE draft_id = ? ORDER BY id", draftID)
+	if err != nil {
+		return nil, err
+	}
+	var out []mail.Attachment
+	for _, a := range atts.Values {
+		data, err := os.ReadFile(store.Str(a[2]))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, mail.Attachment{Filename: store.Str(a[0]), ContentType: store.Str(a[1]), Data: data})
+	}
+	return out, nil
 }
 
 // recipients validates the draft's addresses and returns the bare envelope
@@ -830,34 +881,11 @@ func (s *Service) enqueue(ctx context.Context, draftID, rev int64, checked []str
 	if rs != nil && rs.ruleID != 0 {
 		o.Header = map[string]string{mail.RuleHeader: strconv.FormatInt(rs.ruleID, 10)}
 	}
-	if d.SourceMessageID != 0 && (d.Mode == "reply" || d.Mode == "reply_all" || d.Mode == "forward") {
-		rows, err := s.db.Query(ctx, "SELECT message_id, refs FROM messages WHERE id = ?", d.SourceMessageID)
-		if err != nil {
-			return err
-		}
-		if len(rows.Values) > 0 && store.Str(rows.Values[0][0]) != "" {
-			id := store.Str(rows.Values[0][0])
-			if d.Mode == "forward" {
-				// A forward is not a reply (RFC 5322 3.6.4), and its recipient may be new
-				// to the thread: the original's ID keeps it in the conversation without
-				// listing the earlier mail's. GetThread recognizes a forward by this shape.
-				o.References = []string{id}
-			} else {
-				o.InReplyTo = id
-				o.References = append(strings.Fields(store.Str(rows.Values[0][1])), id)
-			}
-		}
-	}
-	atts, err := s.db.Query(ctx, "SELECT filename, content_type, path FROM draft_attachments WHERE draft_id = ? ORDER BY id", draftID)
-	if err != nil {
+	if _, err := s.threadHeaders(ctx, d, &o); err != nil {
 		return err
 	}
-	for _, a := range atts.Values {
-		data, err := os.ReadFile(store.Str(a[2]))
-		if err != nil {
-			return err
-		}
-		o.Attachments = append(o.Attachments, mail.Attachment{Filename: store.Str(a[0]), ContentType: store.Str(a[1]), Data: data})
+	if o.Attachments, err = s.draftFiles(ctx, draftID); err != nil {
+		return err
 	}
 	now := s.clk().Now()
 	sendAfter, date, sendAt := now.Add(UndoSendWindow), now, any(nil)

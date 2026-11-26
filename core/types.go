@@ -59,6 +59,7 @@ type Account struct {
 	AIInstructions                          string // the user's facts and guidelines for Wit drafting from this account
 	IsDefault                               bool
 	LabelKeywords                           bool // labels and the server's IMAP keywords follow each other (ADR 0035)
+	ServerDrafts                            bool // its drafts are kept in its Drafts folder too, for other apps to see and change (ADR 0045)
 	Sync                                    SyncRange
 	Folders                                 int // folders synced so far: 0 before the first sync
 	AuthType, Status                        string
@@ -151,6 +152,7 @@ type AccountPatch struct {
 	IconImage              []byte  // an uploaded png, jpeg, gif, webp or svg: Icon becomes image:<n>
 	AIInstructions         *string // trimmed, at most MaxAIInstructions runes
 	LabelKeywords          *bool   // turning it on imports the server's keywords at once
+	ServerDrafts           *bool   // turning it on stores the account's drafts in its Drafts folder from its next sync
 }
 
 // AccountIcon is an account's uploaded icon image.

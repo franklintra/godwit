@@ -24,6 +24,10 @@ const (
 	ImportProgress      = "import.progress"       // an .eml import into AccountID handled Done of Total files
 	AddressBooksChanged = "address_books.changed" // address books, collections, order or synced cards changed
 	DraftsChanged       = "drafts.changed"        // a program created or changed a draft (ADR 0043)
+	// DraftConflict: a server draft of AccountID changed both here and in
+	// another app, or another app removed it (ADR 0045); Kind says which:
+	// server_newer, local_newer or server_gone.
+	DraftConflict = "drafts.conflict"
 	// NotificationClicked: the backend got a click on notification Notification
 	// while a ui client is connected; the interface opens what it shows. With
 	// none, the backend starts the interface for it instead.
@@ -60,7 +64,8 @@ type Event struct {
 	MessageIDs []int64
 	Error      string
 	// Kind is a sync.failed's conn.FailureKind (dns, connect, timeout, tls,
-	// auth, protocol), or empty when the connection was fine.
+	// auth, protocol), or empty when the connection was fine; a
+	// drafts.conflict's kind of conflict.
 	Kind string
 	// ConversationID is set on approvals.changed and runs.changed.
 	ConversationID int64
