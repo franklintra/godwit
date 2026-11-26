@@ -184,8 +184,11 @@ func (s *Service) scanSecurityBatch(ctx context.Context) (int, error) {
 		}
 		secStatus, secReason := gomail.SecurityReportToDB(rep)
 
-		// Option C: Check DNS for BIMI record if DMARC passed and certified brand
-		if rep.Status == gomail.SecurityVerifiedDomain && gomail.LookupBIMI(ctx, rep.ActualDomain, rep.DMARCPass) {
+		// Option C: Check DNS for BIMI record if DMARC passed and certified brand.
+		// The certificate's host is the sender's choice: fetched as remote
+		// images are, public hosts only, through the proxy; never with BIMI off.
+		if rep.Status == gomail.SecurityVerifiedDomain && s.netOn().bimi &&
+			gomail.LookupBIMI(ctx, s.securityLookupTXT, s.opts.ImageClient.Transport, rep.ActualDomain, rep.DMARCPass) {
 			secStatus = "certified_brand"
 			secReason = "bimi_dns"
 		}

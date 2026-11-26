@@ -230,7 +230,10 @@ func (p *settingsPage) refresh(hints []events.Event) {
 		}
 		if hints == nil { // opened: the directory may have changed since
 			p.ext.onDirectory = false // 插件 is its way back
-			p.ext.refreshRegistry()
+			// off in 网络隐私, only the directory's 立即更新 fetches it
+			if a.settings.PluginRegistry {
+				p.ext.refreshRegistry()
+			}
 		}
 	case sec == "about" && hints == nil:
 		a.readLatest()
@@ -505,7 +508,8 @@ func settingSelect[T comparable](c *ui.Context, label string, sel *T, opts []kit
 
 // privacyView is a page of 隐私与安全: masking with its log (the keychain's
 // state stands by its title), the sender security checks, remote images with
-// the senders trusted to load them, or the blocked senders.
+// the senders trusted to load them, 网络隐私's connections, or the blocked
+// senders.
 func (p *settingsPage) privacyView(c *ui.Context, sec string) {
 	switch sec {
 	case "masking":
@@ -514,6 +518,8 @@ func (p *settingsPage) privacyView(c *ui.Context, sec string) {
 		pageHeading(c, pageName(sec), i18n.T("settings.security.sub"))
 	case "images":
 		pageHeading(c, pageName(sec), i18n.T("settings.remote_images.page.sub"))
+	case "network":
+		pageHeading(c, pageName(sec), i18n.T("settings.network.sub"))
 	default:
 		pageHeading(c, pageName(sec), i18n.T("settings.blocked.sub"))
 	}
@@ -527,6 +533,8 @@ func (p *settingsPage) privacyView(c *ui.Context, sec string) {
 	case "images":
 		p.remoteImagesView(c)
 		p.trustedView(c)
+	case "network":
+		p.networkView(c)
 	default:
 		p.blockedView(c)
 	}

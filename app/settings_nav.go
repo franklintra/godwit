@@ -25,7 +25,7 @@ var settingsNav = []struct {
 }
 
 // privacyPages are the pages of 隐私与安全.
-var privacyPages = []string{"masking", "security", "images", "blocked"}
+var privacyPages = []string{"masking", "security", "images", "network", "blocked"}
 
 func isPrivacyPage(sec string) bool { return slices.Contains(privacyPages, sec) }
 
@@ -45,6 +45,7 @@ var settingsPages = map[string]struct{ title, icon string }{
 	"masking":    {"settings.masking", "eye-off"},
 	"security":   {"settings.security", "shield-check"},
 	"images":     {"settings.remote_images", "image-off"},
+	"network":    {"settings.network", "globe"},
 	"blocked":    {"settings.blocked", "mail-forbid"},
 	"labs":       {"settings.labs", "flask"},
 	"about":      {"settings.about", "info"},

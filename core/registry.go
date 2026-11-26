@@ -32,7 +32,7 @@ import (
 type RegistrySource struct {
 	URL       string // registry.json; its signature is URL + ".sig"
 	PublicKey ed25519.PublicKey
-	Client    *http.Client // nil: a client with registryTimeout
+	Client    *http.Client // nil: one through Service.Proxy with registryTimeout
 }
 
 const (
@@ -117,7 +117,8 @@ type cachedRegistryFile struct{ Body, Sig []byte }
 // older than the cached one, caches it and applies it to the installed
 // plugins: files it no longer lists stop (trust_revoked), and files the
 // user allowed that it lists become listed. On any failure the cache and
-// the plugins stay as they were.
+// the plugins stay as they were. It fetches whatever Settings.PluginRegistry
+// says: that switch stops only the refreshes nobody asked for.
 func (s *Service) RefreshPluginRegistry(ctx context.Context) error {
 	ctx, end, err := s.begin(ctx, 0)
 	if err != nil {
@@ -142,11 +143,11 @@ func (s *Service) RefreshPluginRegistry(ctx context.Context) error {
 }
 
 func (s *Service) refreshRegistry(ctx context.Context, src *RegistrySource) error {
-	body, err := fetchRegistryFile(ctx, src, src.URL, maxRegistry, nil)
+	body, err := fetchRegistryFile(ctx, s.registryClient(src), src.URL, maxRegistry, nil)
 	if err != nil {
 		return err
 	}
-	sig, err := fetchRegistryFile(ctx, src, src.URL+".sig", maxRegistrySig, nil)
+	sig, err := fetchRegistryFile(ctx, s.registryClient(src), src.URL+".sig", maxRegistrySig, nil)
 	if err != nil {
 		return err
 	}
@@ -185,13 +186,17 @@ func (s *Service) applyCachedRegistry(ctx context.Context) error {
 	return s.applyRegistry(ctx, reg)
 }
 
-func fetchRegistryFile(ctx context.Context, src *RegistrySource, url string, limit int64, progress func(int64)) ([]byte, error) {
+// registryClient is src's client, else one through Proxy.
+func (s *Service) registryClient(src *RegistrySource) *http.Client {
+	if src.Client != nil {
+		return src.Client
+	}
+	return s.proxyClient(registryTimeout)
+}
+
+func fetchRegistryFile(ctx context.Context, c *http.Client, url string, limit int64, progress func(int64)) ([]byte, error) {
 	if !strings.HasPrefix(url, "https://") {
 		return nil, fmt.Errorf("plugin registry: %s is not https", url)
-	}
-	c := src.Client
-	if c == nil {
-		c = &http.Client{Timeout: registryTimeout}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -388,7 +393,8 @@ func (s *Service) isReviewedPackage(name string, r pluginRow, p plugins.Registry
 }
 
 // startRegistryRefresh refreshes the registry registryFirst after start and
-// then every registryEvery, until Close. Failures show as RegistryView.Stale.
+// then every registryEvery, until Close; not while Settings.PluginRegistry is
+// off, which netSwitched catches up on. Failures show as RegistryView.Stale.
 func (s *Service) startRegistryRefresh() {
 	ctx, end, err := s.begin(context.Background(), 0)
 	if err != nil {
@@ -404,7 +410,9 @@ func (s *Service) startRegistryRefresh() {
 				return
 			case <-t.C:
 			}
-			s.RefreshPluginRegistry(ctx)
+			if s.netOn().registry {
+				s.RefreshPluginRegistry(ctx)
+			}
 			t.Reset(registryEvery)
 		}
 	}()
@@ -476,7 +484,7 @@ func (s *Service) runRegistryInstall(ctx context.Context, name string, src *Regi
 	if !rel.Parsed.IsNative() {
 		file = rel.Parsed.Main
 	}
-	if err := downloadArtifact(ctx, src, art, filepath.Join(dir, file), progress); err != nil {
+	if err := downloadArtifact(ctx, s.registryClient(src), art, filepath.Join(dir, file), progress); err != nil {
 		return PluginInfo{}, fmt.Errorf("plugin %s %s: %w", name, rel.Version, err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "plugin.json"), rel.Manifest, 0o600); err != nil {
@@ -564,7 +572,7 @@ func listsRelease(reg plugins.Registry, name string, rel plugins.RegistryRelease
 }
 
 // downloadArtifact writes a's file to path if it is exactly a.Size bytes with a.SHA256.
-func downloadArtifact(ctx context.Context, src *RegistrySource, a plugins.Artifact, path string, progress func(PluginInstallProgress)) error {
+func downloadArtifact(ctx context.Context, c *http.Client, a plugins.Artifact, path string, progress func(PluginInstallProgress)) error {
 	var downloaded func(int64)
 	if progress != nil {
 		downloaded = func(done int64) {
@@ -572,7 +580,7 @@ func downloadArtifact(ctx context.Context, src *RegistrySource, a plugins.Artifa
 		}
 		downloaded(0)
 	}
-	b, err := fetchRegistryFile(ctx, src, a.URL, a.Size, downloaded)
+	b, err := fetchRegistryFile(ctx, c, a.URL, a.Size, downloaded)
 	if err != nil {
 		if errors.Is(err, errRegistryTooLarge) {
 			return ErrRegistryMismatch

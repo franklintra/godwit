@@ -25,7 +25,9 @@ type Avatar struct {
 
 // SenderAvatar loads the ordinary sender avatar under the current message's
 // remote-image policy. allowRemote is the user's explicit permission for this message.
-// Missing or unavailable sources are normal empty results.
+// Missing or unavailable sources are normal empty results. A remote source
+// switched off in 网络隐私 (Settings.BIMI, Favicons, Gravatar) is neither
+// asked nor read from the cache.
 func (s *Service) SenderAvatar(ctx context.Context, messageID int64, allowRemote bool) (Avatar, error) {
 	ctx, end, err := s.begin(ctx, 0)
 	if err != nil {
@@ -91,6 +93,10 @@ func (s *Service) SenderAvatar(ctx context.Context, messageID int64, allowRemote
 		}
 		return Avatar{Data: img.Data, Format: img.Format, Source: source, Width: img.Width, Height: img.Height}, nil
 	}
+	sw := s.netOn()
+	if !sw.bimi && !sw.favicons && !sw.gravatar {
+		return Avatar{}, nil
+	}
 	if ok, err := allowed(); !ok || err != nil {
 		return Avatar{}, err
 	}
@@ -103,39 +109,46 @@ func (s *Service) SenderAvatar(ctx context.Context, messageID int64, allowRemote
 	for _, provider := range s.ListProviders() {
 		providerDomains = append(providerDomains, provider.Domains...)
 	}
-	if avatar.PersonalDomain(domain, providerDomains) {
+	if avatar.PersonalDomain(domain, providerDomains) && (sw.bimi || sw.favicons) {
 		var policyErr error
 		canFetch := func() bool {
 			var ok bool
 			ok, policyErr = allowed()
 			return ok && policyErr == nil
 		}
-		img, ok := avatar.FindBIMI(ctx, s.opts.LookupTXT, s.images, domain, canFetch)
-		if policyErr != nil {
-			return Avatar{}, policyErr
-		}
-		if ok {
-			return result(img, "bimi")
-		}
-		// Any site's cached icon first: an unreachable sender host (account.tiktok.com)
-		// must not hold up its organization's icon (tiktok.com) on every message.
-		for _, host := range sites {
-			if img, ok, _ := s.images.LookupAvatar(ctx, imagecache.AvatarKey("favicon", host)); ok {
-				return result(img, "favicon")
-			}
-		}
-		for _, host := range sites {
-			if ok, err := allowed(); !ok || err != nil {
-				return Avatar{}, err
-			}
-			img, ok := avatar.FindFavicon(ctx, s.opts.ImageClient, s.images, host, canFetch)
+		if sw.bimi {
+			img, ok := avatar.FindBIMI(ctx, s.opts.LookupTXT, s.images, domain, canFetch)
 			if policyErr != nil {
 				return Avatar{}, policyErr
 			}
 			if ok {
-				return result(img, "favicon")
+				return result(img, "bimi")
 			}
 		}
+		if sw.favicons {
+			// Any site's cached icon first: an unreachable sender host (account.tiktok.com)
+			// must not hold up its organization's icon (tiktok.com) on every message.
+			for _, host := range sites {
+				if img, ok, _ := s.images.LookupAvatar(ctx, imagecache.AvatarKey("favicon", host)); ok {
+					return result(img, "favicon")
+				}
+			}
+			for _, host := range sites {
+				if ok, err := allowed(); !ok || err != nil {
+					return Avatar{}, err
+				}
+				img, ok := avatar.FindFavicon(ctx, s.opts.ImageClient, s.images, host, canFetch)
+				if policyErr != nil {
+					return Avatar{}, policyErr
+				}
+				if ok {
+					return result(img, "favicon")
+				}
+			}
+		}
+	}
+	if !sw.gravatar {
+		return Avatar{}, nil
 	}
 	if ok, err := allowed(); !ok || err != nil {
 		return Avatar{}, err

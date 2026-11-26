@@ -27,7 +27,8 @@ func TestSettingsDefaults(t *testing.T) {
 	assert.Equal(t, Settings{Theme: "system", Density: "standard", FontSize: 14, SettingsVersion: 8, ReplyLanguage: "match",
 		BackgroundReceive: "until_quit", ShowTrayIcon: true, UnreadOnAppIcon: true, NotifyNewMail: true, NotifyPreview: true, ThreadView: true, ThreadCollapse: true, ThreadCollapseThreshold: 5, RemoteImages: "auto", AutoLabel: true, LabelDisplay: "both", JudgeThreshold: 0.8, BackgroundSync: "inbox",
 		MCPSend: "confirm", SummaryMode: "off", Masking: true, MaskCategories: defaultMaskCategories(),
-		SecurityWarnings: true, VerifiedBadge: true, ProxyMode: "system"}, got)
+		SecurityWarnings: true, VerifiedBadge: true, ProxyMode: "system",
+		ModelCatalog: true, PluginRegistry: true, Gravatar: true, Favicons: true, BIMI: true, UpdateChecks: true}, got)
 }
 
 func TestSettingsRoundTrip(t *testing.T) {

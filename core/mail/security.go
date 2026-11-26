@@ -181,7 +181,10 @@ func cachedBIMI(domain string) bool {
 // LookupBIMI checks whether the domain has a published BIMI record with a valid, verified
 // mark certificate (VMC) signed by an approved authority (DigiCert or Entrust).
 // According to the BIMI specification, BIMI can only be valid if DMARC passes.
-func LookupBIMI(ctx context.Context, domain string, dmarcPass bool) bool {
+// lookup reads DNS (nil: the system resolver); rt fetches the certificate,
+// whose URL the sender's domain chooses (nil: http.DefaultTransport), so a
+// caller gives one that keeps to public hosts and its proxy.
+func LookupBIMI(ctx context.Context, lookup func(context.Context, string) ([]string, error), rt http.RoundTripper, domain string, dmarcPass bool) bool {
 	if !dmarcPass {
 		return false
 	}
@@ -192,10 +195,10 @@ func LookupBIMI(ctx context.Context, domain string, dmarcPass bool) bool {
 	if cachedBIMI(domain) {
 		return true
 	}
-	has := checkBIMIHost(ctx, domain)
+	has := checkBIMIHost(ctx, lookup, rt, domain)
 	if !has {
 		if root, err := publicsuffix.EffectiveTLDPlusOne(domain); err == nil && root != domain {
-			has = LookupBIMI(ctx, root, true)
+			has = LookupBIMI(ctx, lookup, rt, root, true)
 			if has {
 				if entry, ok := bimiCache.Load(root); ok {
 					bimiCache.Store(domain, entry)
@@ -225,7 +228,7 @@ func parseBIMIAuthorityURL(txt string) string {
 	return authority
 }
 
-func verifyVMCURL(ctx context.Context, domain, certURL string) bool {
+func verifyVMCURL(ctx context.Context, rt http.RoundTripper, domain, certURL string) bool {
 	u, err := url.Parse(certURL)
 	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil {
 		return false
@@ -234,7 +237,7 @@ func verifyVMCURL(ctx context.Context, domain, certURL string) bool {
 	if err != nil {
 		return false
 	}
-	client := &http.Client{Timeout: 2500 * time.Millisecond, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+	client := &http.Client{Transport: rt, Timeout: 2500 * time.Millisecond, CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		if req.URL.Scheme != "https" || req.URL.User != nil || len(via) >= 5 {
 			return http.ErrUseLastResponse
 		}
@@ -314,10 +317,13 @@ func hasBrandEKU(cert *x509.Certificate) bool {
 	return slices.ContainsFunc(cert.UnknownExtKeyUsage, func(oid asn1.ObjectIdentifier) bool { return oid.Equal(brandIndicatorOID) })
 }
 
-func checkBIMIHost(ctx context.Context, domain string) bool {
+func checkBIMIHost(ctx context.Context, lookup func(context.Context, string) ([]string, error), rt http.RoundTripper, domain string) bool {
 	c, cancel := context.WithTimeout(ctx, 3000*time.Millisecond)
 	defer cancel()
-	txts, err := net.DefaultResolver.LookupTXT(c, "default._bimi."+domain)
+	if lookup == nil {
+		lookup = net.DefaultResolver.LookupTXT
+	}
+	txts, err := lookup(c, "default._bimi."+domain)
 	if err != nil {
 		return false
 	}
@@ -325,7 +331,7 @@ func checkBIMIHost(ctx context.Context, domain string) bool {
 		t = strings.TrimSpace(t)
 		if strings.HasPrefix(t, "v=BIMI1") {
 			certURL := parseBIMIAuthorityURL(t)
-			if certURL != "" && verifyVMCURL(c, domain, certURL) {
+			if certURL != "" && verifyVMCURL(c, rt, domain, certURL) {
 				return true
 			}
 		}

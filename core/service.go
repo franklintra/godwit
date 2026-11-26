@@ -150,6 +150,9 @@ type Service struct {
 
 	settingsMu sync.Mutex                  // settings read then written (SetSettings, the trusted senders)
 	proxy      atomic.Pointer[proxyConfig] // the saved proxy (loadProxy, SetSettings), read by Proxy
+	switches   atomic.Pointer[netSwitches] // 网络隐私's saved switches (loadNetSwitches, SetSettings)
+	proxyOnce  sync.Once                   // makes proxyRT
+	proxyRT    *http.Transport             // proxyClient's
 	editMu     sync.Mutex                  // local changes (SetFlags, Move, Delete, drafts, Send) read then write
 	ruleRunMu  sync.Mutex                  // one rule run at a time (runRule): the consumer, a retry, a run over existing mail
 
@@ -342,6 +345,10 @@ func New(ctx context.Context, opts Options) (*Service, error) {
 		// an unreadable settings row must not keep mail from starting; the default, 跟随系统, stands until a save
 		slog.Warn("proxy settings unreadable, following the system proxy", "err", err)
 		s.setProxy(defaultSettings(), "")
+	}
+	if err := s.loadNetSwitches(ctx); err != nil {
+		slog.Warn("network privacy settings unreadable, using the defaults", "err", err)
+		s.setNetSwitches(defaultSettings())
 	}
 	// the hooks are package-wide: the last Service started owns them; they are
 	// set once and read the owner atomically, as an earlier Service's dial may still run

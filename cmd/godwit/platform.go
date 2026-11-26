@@ -534,6 +534,38 @@ func (p *platform) LatestVersion(ctx context.Context) (string, error) {
 	return u.Version, nil
 }
 
+// syncUpdateChecks makes the updater's automatic checks (its updater.json)
+// follow Settings.UpdateChecks. The Store's package has no updater.
+func syncUpdateChecks(on bool) {
+	if !packaged() && updater.AutomaticChecks() != on {
+		updater.SetAutomaticChecks(on)
+	}
+}
+
+// adoptUpdateChecks reconciles Settings.UpdateChecks with the updater's
+// file at start, before its first check: automatic checks turned off in
+// updater.json, by hand before Godwit had the setting, stay off, and the
+// setting follows; otherwise the file follows the setting. It returns the
+// settings to start with.
+func adoptUpdateChecks(ctx context.Context, svc interface {
+	SetSettings(context.Context, core.Settings) (core.Settings, error)
+}, st core.Settings) core.Settings {
+	if packaged() {
+		return st
+	}
+	if st.UpdateChecks && !updater.AutomaticChecks() {
+		st.UpdateChecks = false
+		saved, err := svc.SetSettings(ctx, st)
+		if err != nil {
+			log.Printf("turning automatic update checks off as updater.json has them: %v", err)
+			return st
+		}
+		return saved
+	}
+	syncUpdateChecks(st.UpdateChecks)
+	return st
+}
+
 func (p *platform) UpdatesInstallThemselves() bool {
 	return !packaged() && updater.AutomaticDownloads() // the Store's package: the Store's page installs it
 }
@@ -582,6 +614,7 @@ func (p *platform) SettingsChanged(st core.Settings) {
 	if err := webui.ThemeChanged.Broadcast(webui.ThemeOf(st)); err != nil {
 		log.Printf("theme to the pages: %v", err)
 	}
+	syncUpdateChecks(st.UpdateChecks)
 	if p.reader != nil {
 		p.reader.SettingsChanged(st)
 	}

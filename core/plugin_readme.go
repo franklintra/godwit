@@ -44,7 +44,7 @@ func (s *Service) PluginReadme(ctx context.Context, name, lang string) (string, 
 	}
 	for _, n := range append(names, "README.md") {
 		var b []byte
-		if b, err = fetchRegistryFile(ctx, src, base+"/"+n, maxPluginReadme, nil); err == nil {
+		if b, err = fetchRegistryFile(ctx, s.registryClient(src), base+"/"+n, maxPluginReadme, nil); err == nil {
 			return string(b), nil
 		}
 	}

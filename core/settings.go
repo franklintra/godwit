@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/mail"
+	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -179,6 +180,31 @@ type Settings struct {
 	// password.
 	ProxyPassword    string `json:",omitempty"`
 	ProxyPasswordSet bool
+	// The connections Godwit makes by itself (网络隐私, Network privacy),
+	// each a switch, on by default; GODWIT_OFFLINE_DEFAULTS=1 makes them off
+	// by default (offlineDefaults). Each goes through Proxy.
+	//
+	// ModelCatalog fetches models.dev's catalog of model names and context
+	// windows (Options.ModelsDev): a day old, and when an unlisted model is
+	// asked about. Off, the copy already fetched stays in use.
+	ModelCatalog bool
+	// PluginRegistry refreshes the signed plugin directory (ADR 0016) from
+	// dl.godwit.email a minute after start, then daily, and as 插件 opens.
+	// Off, only RefreshPluginRegistry fetches it, so a release the reviewers
+	// withdraw keeps running until then (trust_revoked waits for it).
+	PluginRegistry bool
+	// Gravatar, Favicons and BIMI are the sources of sender avatars, each
+	// asked only where RemoteImages lets the message's images load:
+	// gravatar.com, by a SHA-256 of the sender's address; the icon of the
+	// sender's site (and of a model service's, ModelServiceAvatar); the logo
+	// the sender's domain publishes at default._bimi. BIMI off also skips
+	// the security scan's mark certificate (VMC) fetch, so no mail is
+	// marked a certified brand.
+	Gravatar, Favicons, BIMI bool
+	// UpdateChecks lets the app ask by itself whether a newer Godwit is out:
+	// the mygo updater's automatic checks (its updater.json, which the app
+	// keeps in step) and the update card's. Off, only Check for Updates asks.
+	UpdateChecks bool
 	// SettingsVersion is 2 once the default text grew from 13 to 14 px and a
 	// stored FontSize was raised by one to keep its sizes; 3 once a stored
 	// BodyFontSize of 14, the old default, became 0 (follow FontSize); 4 once
@@ -274,12 +300,19 @@ const (
 )
 
 func defaultSettings() Settings {
+	net := !offlineDefaults()
 	return Settings{Theme: "system", Density: "standard", FontSize: 14, SettingsVersion: settingsVersion, ReplyLanguage: "match", RemoteImages: "auto",
 		BackgroundReceive: BackgroundReceiveUntilQuit, ShowTrayIcon: true, UnreadOnAppIcon: true, NotifyNewMail: true, NotifyPreview: true, ThreadView: true, BackgroundSync: BackgroundSyncInbox,
 		ThreadCollapse: true, ThreadCollapseThreshold: DefaultThreadCollapse, AutoLabel: true, LabelDisplay: LabelDisplayBoth, JudgeThreshold: 0.8,
 		MCPSend: MCPSendConfirm, SummaryMode: SummaryOff, Masking: true, MaskCategories: defaultMaskCategories(),
-		SecurityWarnings: true, VerifiedBadge: true, SecurityAI: false, ProxyMode: ProxySystem}
+		SecurityWarnings: true, VerifiedBadge: true, SecurityAI: false, ProxyMode: ProxySystem,
+		ModelCatalog: net, PluginRegistry: net, Gravatar: net, Favicons: net, BIMI: net, UpdateChecks: net}
 }
+
+// offlineDefaults reports whether GODWIT_OFFLINE_DEFAULTS=1 (in the
+// backend's environment) turns the connections of 网络隐私 off by default:
+// a switch saved since keeps the user's choice; one never saved starts off.
+func offlineDefaults() bool { return os.Getenv("GODWIT_OFFLINE_DEFAULTS") == "1" }
 
 var langRE = regexp.MustCompile(`^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$`)
 
@@ -536,6 +569,8 @@ func (s *Service) SetSettings(ctx context.Context, st Settings) (Settings, error
 		password = s.proxy.Load().password // kept as it is
 	}
 	s.setProxy(st, password)
+	s.setNetSwitches(st)
+	s.netSwitched(stored, st)
 	s.maskingChanged(st)
 	if (st.BackgroundSync == BackgroundSyncAll) != (stored.BackgroundSync == BackgroundSyncAll) {
 		s.applyUIBackgroundSync(st)
