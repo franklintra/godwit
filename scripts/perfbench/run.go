@@ -17,16 +17,16 @@ import (
 )
 
 type runConfig struct {
-	bin, root, out, label, commit, webDir, web string
-	scale                                      float64
-	seed                                       uint64
-	runs, hotRounds, syncMsgs, syncRuns        int
-	contMsgs, contBoots, pressRounds           int
-	mem                                        int64
-	pressure                                   string
-	idle                                       time.Duration
-	quick                                      bool
-	only                                       map[string]bool
+	bin, root, out, label, commit, webDir, web      string
+	scale                                           float64
+	seed                                            uint64
+	runs, hotRounds, viewRounds, syncMsgs, syncRuns int
+	contMsgs, contBoots, pressRounds                int
+	mem                                             int64
+	pressure                                        string
+	idle                                            time.Duration
+	quick                                           bool
+	only                                            map[string]bool
 }
 
 func (c runConfig) want(part string) bool { return len(c.only) == 0 || c.only[part] }
