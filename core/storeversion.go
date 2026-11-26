@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -29,8 +28,7 @@ func (s *Service) StoreLatestVersion(ctx context.Context) (string, error) {
 		return "", err
 	}
 	// The proxy resolves the Store's name itself: some networks resolve only there.
-	transport := &http.Transport{Proxy: func(r *http.Request) (*url.URL, error) { return s.Proxy(r.URL), nil }}
-	res, err := (&http.Client{Transport: transport, Timeout: 15 * time.Second}).Do(req)
+	res, err := s.proxyClient(15 * time.Second).Do(req)
 	if err != nil {
 		return "", err
 	}

@@ -3,7 +3,8 @@ package core
 // What models.dev says of models (ai.ModelCatalog): their display names and
 // context windows. Fetched in the background, kept in the data directory, and
 // fetched again once a day old, or six hours old when a model it does not
-// list is asked about.
+// list is asked about; never while Settings.ModelCatalog is off, when the
+// copy kept stays in use.
 
 import (
 	"context"
@@ -115,16 +116,21 @@ func (s *Service) catalogNames(m ModelService) map[string]string {
 // unlisted one may fetch the catalog again, in the background.
 func (s *Service) catalogModel(baseURL, model string) (ai.CatalogModel, bool) {
 	m, ok := s.catalog.Load().Model(baseURL, model)
-	if !ok && s.opts.ModelsDev != "" && time.Since(time.Unix(0, s.catalogTry.Load())) >= catalogMissing &&
+	if !ok && s.opts.ModelsDev != "" && s.netOn().catalog && time.Since(time.Unix(0, s.catalogTry.Load())) >= catalogMissing &&
 		s.catalogAge() >= catalogMissing {
-		if ctx, end, err := s.begin(context.Background(), 0); err == nil {
-			go func() {
-				defer end()
-				s.fetchCatalog(ctx)
-			}()
-		}
+		s.fetchCatalogInBackground()
 	}
 	return m, ok
+}
+
+// fetchCatalogInBackground fetches the catalog without waiting for it.
+func (s *Service) fetchCatalogInBackground() {
+	if ctx, end, err := s.begin(context.Background(), 0); err == nil {
+		go func() {
+			defer end()
+			s.fetchCatalog(ctx)
+		}()
+	}
 }
 
 // loadCatalog applies the cached catalog, if there is one.
@@ -148,7 +154,7 @@ func (s *Service) catalogAge() time.Duration {
 }
 
 // startCatalogRefresh fetches the catalog whenever it is stale, now and every
-// catalogLook after, until Close.
+// catalogLook after, until Close; fetchCatalog skips it while it is off.
 func (s *Service) startCatalogRefresh() {
 	ctx, end, err := s.begin(context.Background(), 0)
 	if err != nil {
@@ -172,9 +178,9 @@ func (s *Service) startCatalogRefresh() {
 }
 
 // fetchCatalog fetches, caches and applies the catalog, one fetch at a time;
-// a failure keeps what there was.
+// a failure keeps what there was. Nothing while Settings.ModelCatalog is off.
 func (s *Service) fetchCatalog(ctx context.Context) {
-	if !s.catalogBusy.CompareAndSwap(false, true) {
+	if !s.netOn().catalog || !s.catalogBusy.CompareAndSwap(false, true) {
 		return
 	}
 	defer s.catalogBusy.Store(false)
@@ -191,7 +197,7 @@ func (s *Service) fetchCatalogOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	res, err := http.DefaultClient.Do(req)
+	res, err := s.proxyClient(0).Do(req) // catalogTimeout's context limits it
 	if err != nil {
 		return err
 	}

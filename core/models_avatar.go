@@ -9,7 +9,8 @@ import (
 
 // ModelServiceAvatar is the favicon of the site a model service talks to;
 // empty Data when it has none, or the service signs in with a subscription
-// (those have a mark of their own) or runs on a local host.
+// (those have a mark of their own) or runs on a local host, or site icons
+// are off in 网络隐私 (Settings.Favicons).
 func (s *Service) ModelServiceAvatar(ctx context.Context, id int64) (Avatar, error) {
 	ctx, end, err := s.begin(ctx, 0)
 	if err != nil {
@@ -23,7 +24,7 @@ func (s *Service) ModelServiceAvatar(ctx context.Context, id int64) (Avatar, err
 		return Avatar{}, err
 	}
 	host := modelServiceHost(m)
-	if host == "" {
+	if host == "" || !s.netOn().favicons {
 		return Avatar{}, nil
 	}
 	img, ok := avatar.FindFavicon(ctx, s.opts.ImageClient, s.images, host, nil)
