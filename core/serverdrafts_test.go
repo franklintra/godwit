@@ -411,3 +411,24 @@ func TestServerDraftRemovedElsewhere(t *testing.T) {
 	e.idle(t)
 	assert.Len(t, e.onServer(t, "Drafts"), 1)
 }
+
+// A draft's own header fields and read receipt go to its server copy, and
+// the receipt comes back from a copy another app changed.
+func TestServerDraftKeepsHeaderFields(t *testing.T) {
+	e := newServerDraftsEnv(t, true)
+	d := e.newDraftTo(t, "plan", "text")
+	d.Headers, d.ReadReceipt = []mail.Header{{Name: "X-Tracking-ID", Value: "42"}}, true
+	d, err := e.s.SaveDraft(bg, d)
+	require.NoError(t, err)
+	require.NoError(t, e.s.FlushServerDraft(bg, d.ID))
+	e.sync(t)
+	raws := e.rawOnServer(t, "Drafts")
+	require.Len(t, raws, 1)
+	assert.Equal(t, "42", headerValue(raws[0], "X-Tracking-ID"))
+	assert.Contains(t, headerValue(raws[0], "Disposition-Notification-To"), e.acc.Email)
+
+	p, _, err := e.s.parseServerDraft(bg, e.acc.ID, raws[0])
+	require.NoError(t, err)
+	assert.True(t, p.ReadReceipt)
+	assert.Nil(t, p.Headers, "another app's fields are never taken")
+}

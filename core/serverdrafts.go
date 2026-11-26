@@ -346,7 +346,7 @@ func (s *Service) serverDraftRaw(ctx context.Context, d Draft, token string) ([]
 	}
 	o := mail.Outgoing{From: (&netmail.Address{Name: acc.Name, Address: acc.Email}).String(), ReplyTo: d.ReplyTo,
 		To: d.To, Cc: d.Cc, Bcc: d.Bcc, Subject: d.Subject, HTML: d.HTML, Draft: true,
-		Header: map[string]string{DraftIDHeader: token}}
+		Headers: d.Headers, ReadReceipt: d.ReadReceipt, Header: map[string]string{DraftIDHeader: token}}
 	for _, id := range mail.CIDs(d.HTML) {
 		if a, ok := imgs[id]; ok {
 			delete(imgs, id)
@@ -592,8 +592,8 @@ func fetchAll(ctx context.Context, recv backend.Receiver, at backend.Location) (
 }
 
 // parseServerDraft reads a draft another app saved: its addresses (Bcc
-// included), subject, body (HTML, else the text as paragraphs) and
-// attachments. A reply whose original is here (by DraftSourceHeader,
+// included), subject, body (HTML, else the text as paragraphs), read
+// receipt and attachments. A reply whose original is here (by DraftSourceHeader,
 // In-Reply-To or the last of References) becomes a reply to it, a reply-all
 // or forward when DraftModeHeader says so; anything else is a new message.
 // Inline images other than the account's signature images are dropped, as
@@ -616,6 +616,11 @@ func (s *Service) parseServerDraft(ctx context.Context, accountID int64, raw []b
 	if d.HTML == "" && p.Text != "" {
 		d.HTML = "<p>" + escapeLines(p.Text) + "</p>"
 	}
+	// A read receipt asked for, to whatever address: a draft asks for one to
+	// its own account only. Other header fields stay as the draft has them
+	// (replaceDraft) or none (a new draft): another app's fields, such as its
+	// X-Mailer, are not the user's to send.
+	d.ReadReceipt = strings.TrimSpace(h.Header.Get("Disposition-Notification-To")) != ""
 	ids := []string{strings.Trim(strings.TrimSpace(h.Header.Get(DraftSourceHeader)), "<>"), p.InReplyTo}
 	if len(p.References) > 0 {
 		ids = append(ids, p.References[len(p.References)-1])
@@ -676,10 +681,11 @@ func (s *Service) copyDraft(ctx context.Context, d Draft) (Draft, error) {
 	return s.createDraft(ctx, d, files, d.FromProgram)
 }
 
-// replaceDraft overwrites the addresses, subject, body and attachments of
-// draft id with d's and files, whatever its revision: a compose window
-// editing it then finds it changed elsewhere (ErrStaleDraft). A draft in the
-// outbox stays (ErrStaleDraft). It returns the draft's new revision.
+// replaceDraft overwrites the addresses, subject, body, read receipt and
+// attachments of draft id with d's and files (its header fields stay),
+// whatever its revision: a compose window editing it then finds it changed
+// elsewhere (ErrStaleDraft). A draft in the outbox stays (ErrStaleDraft).
+// It returns the draft's new revision.
 func (s *Service) replaceDraft(ctx context.Context, id int64, d Draft, files []mail.Attachment) (int64, error) {
 	html, err := s.sanitizeDraft(ctx, d.HTML)
 	if err != nil {
@@ -694,8 +700,8 @@ func (s *Service) replaceDraft(ctx context.Context, id int64, d Draft, files []m
 	if err == nil {
 		_, err = s.db.DurableTransaction(ctx, []sqlite.Statement{
 			{SQL: `UPDATE drafts SET to_addrs = ?, cc_addrs = ?, bcc_addrs = ?, reply_to = ?, subject = ?, body_html = ?,
-				updated_at = ?, revision = revision + 1 WHERE id = ?`,
-				Args: []any{encodeList(d.To), encodeList(d.Cc), encodeList(d.Bcc), d.ReplyTo, d.Subject, html, time.Now().Unix(), id}},
+				read_receipt = ?, updated_at = ?, revision = revision + 1 WHERE id = ?`,
+				Args: []any{encodeList(d.To), encodeList(d.Cc), encodeList(d.Bcc), d.ReplyTo, d.Subject, html, d.ReadReceipt, time.Now().Unix(), id}},
 			{SQL: "DELETE FROM draft_attachments WHERE draft_id = ?", Args: []any{id}},
 		})
 	}
