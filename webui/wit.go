@@ -576,6 +576,10 @@ type BodyChange struct {
 	Subject  string    `json:"subject"`
 	// Body is the editable HTML as stored.
 	Body string `json:"body"`
+	// Headers are the draft's own header fields as stored, as in ComposeState.
+	Headers []Header `json:"headers"`
+	// ReadReceipt is core.Draft.ReadReceipt as stored, as in ComposeState.
+	ReadReceipt bool `json:"readReceipt"`
 	// FromProgram is core.Draft.FromProgram as stored: a Wit edit marks the
 	// draft, and the page shows the notice from then on (ADR 0043).
 	FromProgram bool `json:"fromProgram"`
@@ -751,7 +755,7 @@ func bodyChange(ctx context.Context, svc Service, s *session, err error) (BodyCh
 	}
 	body := s.adopt(d)
 	return BodyChange{Change: ch, Accounts: accs, From: d.AccountID, Quote: mail.HTMLToText(s.quote), To: nz(d.To), Cc: nz(d.Cc),
-		Bcc: nz(d.Bcc), ReplyTo: d.ReplyTo, Subject: d.Subject, Body: body, FromProgram: d.FromProgram}, nil
+		Bcc: nz(d.Bcc), ReplyTo: d.ReplyTo, Subject: d.Subject, Body: body, Headers: headers(d), ReadReceipt: d.ReadReceipt, FromProgram: d.FromProgram}, nil
 }
 
 // Undo takes back the latest edit Wit applied to the calling window's

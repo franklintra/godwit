@@ -219,7 +219,9 @@ func (p *mailPage) draftBar(c *ui.Context, d core.Draft, info draftInfo) {
 }
 
 // draftFields are the draft's headers: every address it goes to (Cc and Bcc
-// when it has them: approving sends to all of them), its subject and sender.
+// when it has them: approving sends to all of them), the Reply-To replies go
+// to, its subject and sender, a read receipt it asks for, and its own header
+// fields, which the message carries too.
 func (p *mailPage) draftFields(c *ui.Context, d core.Draft) {
 	t, th := theme.Of(c), c.Theme()
 	fields := [][2]string{{i18n.T("compose.to"), cmp.Or(strings.Join(d.To, ", "), i18n.T("mail.no_recipient"))}}
@@ -229,8 +231,17 @@ func (p *mailPage) draftFields(c *ui.Context, d core.Draft) {
 	if len(d.Bcc) > 0 {
 		fields = append(fields, [2]string{i18n.T("compose.bcc"), strings.Join(d.Bcc, ", ")})
 	}
+	if d.ReplyTo != "" {
+		fields = append(fields, [2]string{i18n.T("compose.reply_to"), d.ReplyTo})
+	}
 	fields = append(fields, [2]string{i18n.T("compose.subject"), cmp.Or(d.Subject, i18n.T("mail.no_subject"))},
 		[2]string{i18n.T("compose.from"), p.accountEmail(d.AccountID)})
+	if d.ReadReceipt {
+		fields = append(fields, [2]string{i18n.T("compose.read_receipt"), i18n.T("compose.read_receipt.on")})
+	}
+	for _, h := range d.Headers {
+		fields = append(fields, [2]string{h.Name, h.Value})
+	}
 	ui.Column(c).Gap(th.Space(2)).Children(func() {
 		for _, f := range fields {
 			ui.Row(c).Gap(th.Space(3)).Children(func() {

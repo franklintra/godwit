@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/godwit-email/godwit/core"
 	"github.com/godwit-email/godwit/core/coretest"
+	"github.com/godwit-email/godwit/core/mail"
 	"github.com/godwit-email/godwit/core/store"
 	"github.com/godwit-email/godwit/rpc"
 	"github.com/godwit-email/godwit/rpcbind"
@@ -344,6 +346,39 @@ func TestAuditSendRevision(t *testing.T) {
 	require.NoError(t, full.Call(ctx, "SaveDraft", &d, d))
 	require.NoError(t, full.Call(ctx, "SendRevision", nil, d.ID, d.Revision))
 	assert.Equal(t, [][]any{{"local_api", "SendRevision", d.ID, ""}}, auditRows(t, e.DataDir))
+}
+
+// A program tags its draft with header fields over the Local API (full and
+// mcp); a field Godwit writes fails as invalid_header, naming it and why.
+func TestSaveDraftHeadersOverLocalAPI(t *testing.T) {
+	e := coretest.New(t, coretest.WithoutAutoSync())
+	ctx := t.Context()
+	acc := e.AddAccount(t, "alice@example.com")
+	dir := listen(t, e.Svc)
+	full, mcp := dial(t, dir, rpc.RoleFull), dial(t, dir, rpc.RoleMCP)
+	var d core.Draft
+	require.NoError(t, full.Call(ctx, "SaveDraft", &d, json.RawMessage(`{"AccountID":`+strconv.FormatInt(acc.ID, 10)+
+		`,"Mode":"new","To":["dave@example.com"],"Subject":"hi","Headers":[{"Name":"X-Hermes-Session","Value":"abc"}]}`)))
+	assert.Equal(t, []mail.Header{{Name: "X-Hermes-Session", Value: "abc"}}, d.Headers)
+	var got core.Draft
+	require.NoError(t, mcp.Call(ctx, "GetDraft", &got, d.ID))
+	assert.Equal(t, d.Headers, got.Headers)
+	got.Subject = "hi again"
+	got.Headers = nil // JSON null: kept
+	require.NoError(t, mcp.Call(ctx, "SaveDraft", &got, got))
+	assert.Equal(t, d.Headers, got.Headers)
+
+	d.Headers = []mail.Header{{Name: "Bcc", Value: "eve@example.com"}}
+	var we *rpc.WireError
+	require.ErrorAs(t, full.Call(ctx, "SaveDraft", nil, d), &we)
+	assert.Equal(t, "invalid_header", we.Data.Code)
+	assert.NotContains(t, we.Message, "eve@example.com")
+	typed, err := rpc.Dial(dir, rpc.RoleFull, "rpcbind-test", rpcbind.NewCodec())
+	require.NoError(t, err)
+	defer typed.Close()
+	var he *mail.HeaderError
+	require.ErrorAs(t, typed.Call(ctx, "SaveDraft", nil, d), &he)
+	assert.Equal(t, mail.HeaderError{Name: "Bcc", Problem: mail.HeaderReserved}, *he)
 }
 
 // 批准并发送 (ADR 0043) sends from the interface alone, audited as the ui's

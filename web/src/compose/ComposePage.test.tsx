@@ -92,6 +92,8 @@ const state = {
   quote: "> 原文",
   signatureHtml: "<p>-- me</p>",
   attachments: [],
+  headers: [],
+  readReceipt: false,
   revision: 7,
   updatedAt: new Date(2026, 9, 10, 9, 5).getTime(),
   scheduledFor: 0,
@@ -602,6 +604,34 @@ test("an edit clears the warnings", async () => {
   expect(screen.getByText("发送前检查：没有附件")).toBeInTheDocument();
   await userEvent.type(el, "!");
   expect(screen.queryByText("发送前检查：没有附件")).not.toBeInTheDocument();
+});
+
+test("a draft's own header fields show read-only, folded", async () => {
+  vi.mocked(api.load).mockResolvedValue({
+    ...state,
+    headers: [{ name: "X-Tracking-Id", value: "run 42" }],
+  });
+  render(<ComposePage />);
+  await body();
+  expect(screen.queryByText("run 42")).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "附加邮件头（1）" }));
+  expect(screen.getByText("X-Tracking-Id")).toBeInTheDocument();
+  expect(screen.getByText("run 42")).toBeInTheDocument();
+});
+
+test("a draft without header fields shows no headers row", async () => {
+  render(<ComposePage />);
+  await body();
+  expect(screen.queryByRole("button", { name: /附加邮件头/ })).not.toBeInTheDocument();
+  expect(screen.queryByText("已读回执")).not.toBeInTheDocument();
+});
+
+test("a read receipt request shows read-only", async () => {
+  vi.mocked(api.load).mockResolvedValue({ ...state, readReceipt: true });
+  render(<ComposePage />);
+  await body();
+  expect(screen.getByText("已读回执")).toBeInTheDocument();
+  expect(screen.getByText("已请求，回执发回你的地址")).toBeInTheDocument();
 });
 
 test("account switch keeps body", async () => {

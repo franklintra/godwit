@@ -559,6 +559,81 @@ func TestMCPUpdateDraftPartial(t *testing.T) {
 	assert.Equal(t, "Re: Lunch, Tuesday", last.Subject)
 }
 
+// create_draft and update_draft take header fields as an object, stored
+// by name; update_draft's replace them all, {} removes them, and a field
+// Godwit writes is refused without echoing its value.
+func TestMCPDraftHeaders(t *testing.T) {
+	e := coretest.New(t, coretest.WithoutAutoSync())
+	ctx := t.Context()
+	acc := e.AddAccount(t, "alice@example.com")
+	cs, _ := bridge(t, e)
+	got := ok(t, cs, "create_draft", map[string]any{"account_id": acc.ID, "to": []string{"bob@example.com"}, "subject": "Plans", "body": "Hi",
+		"headers": map[string]string{"X-Hermes-Session": "abc", "X-Agent": "hermes"}})
+	assert.Contains(t, got, `field="header">X-Agent: hermes</untrusted_email>`)
+	ds, err := e.Svc.ListDrafts(ctx, acc.ID)
+	require.NoError(t, err)
+	d := ds[0]
+	assert.Equal(t, []mail.Header{{Name: "X-Agent", Value: "hermes"}, {Name: "X-Hermes-Session", Value: "abc"}}, d.Headers)
+
+	ok(t, cs, "update_draft", map[string]any{"draft_id": d.ID, "revision": d.Revision, "subject": "Plans, again"})
+	d, err = e.Svc.GetDraft(ctx, d.ID)
+	require.NoError(t, err)
+	assert.Len(t, d.Headers, 2, "left out: kept")
+	ok(t, cs, "update_draft", map[string]any{"draft_id": d.ID, "revision": d.Revision, "headers": map[string]string{"X-Hermes-Session": "def"}})
+	d, err = e.Svc.GetDraft(ctx, d.ID)
+	require.NoError(t, err)
+	assert.Equal(t, []mail.Header{{Name: "X-Hermes-Session", Value: "def"}}, d.Headers)
+
+	text, isErr := call(t, cs, "update_draft", map[string]any{"draft_id": d.ID, "revision": d.Revision, "headers": map[string]string{"Bcc": "eve@example.com"}})
+	assert.True(t, isErr)
+	assert.Contains(t, text, `header "Bcc"`)
+	assert.NotContains(t, text, "eve@example.com")
+	text, isErr = call(t, cs, "update_draft", map[string]any{"draft_id": d.ID, "revision": d.Revision, "headers": map[string]any{"X-A": 1}})
+	assert.True(t, isErr)
+	assert.Equal(t, "invalid argument: headers (expected object of up to 32 strings)", text)
+
+	ok(t, cs, "update_draft", map[string]any{"draft_id": d.ID, "revision": d.Revision, "headers": map[string]string{}})
+	d, err = e.Svc.GetDraft(ctx, d.ID)
+	require.NoError(t, err)
+	assert.Empty(t, d.Headers)
+}
+
+// bcc, reply_to and request_read_receipt are the draft's own fields, set
+// and changed by create_draft and update_draft and listed by get_draft.
+func TestMCPDraftBccReplyToReadReceipt(t *testing.T) {
+	e := coretest.New(t, coretest.WithoutAutoSync())
+	ctx := t.Context()
+	acc := e.AddAccount(t, "alice@example.com")
+	cs, _ := bridge(t, e)
+	got := ok(t, cs, "create_draft", map[string]any{"account_id": acc.ID, "to": []string{"bob@example.com"}, "subject": "Plans", "body": "Hi",
+		"bcc": []string{"dave@example.com"}, "reply_to": "team@example.com", "request_read_receipt": true})
+	assert.Contains(t, got, `field="bcc">dave@example.com</untrusted_email>`)
+	assert.Contains(t, got, `field="reply_to">team@example.com</untrusted_email>`)
+	assert.Contains(t, got, "\nread receipt requested, to the sending account's address\n")
+	ds, err := e.Svc.ListDrafts(ctx, acc.ID)
+	require.NoError(t, err)
+	d := ds[0]
+	assert.Equal(t, []string{"dave@example.com"}, d.Bcc)
+	assert.Equal(t, "team@example.com", d.ReplyTo)
+	assert.True(t, d.ReadReceipt)
+
+	ok(t, cs, "update_draft", map[string]any{"draft_id": d.ID, "revision": d.Revision, "subject": "Plans, again"})
+	d, err = e.Svc.GetDraft(ctx, d.ID)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"dave@example.com"}, d.Bcc, "left out: kept")
+	assert.Equal(t, "team@example.com", d.ReplyTo)
+	assert.True(t, d.ReadReceipt)
+	ok(t, cs, "update_draft", map[string]any{"draft_id": d.ID, "revision": d.Revision, "bcc": []string{}, "reply_to": "", "request_read_receipt": false})
+	d, err = e.Svc.GetDraft(ctx, d.ID)
+	require.NoError(t, err)
+	assert.Empty(t, d.Bcc)
+	assert.Empty(t, d.ReplyTo)
+	assert.False(t, d.ReadReceipt)
+	text, isErr := call(t, cs, "update_draft", map[string]any{"draft_id": d.ID, "revision": d.Revision, "request_read_receipt": "yes"})
+	assert.True(t, isErr)
+	assert.Equal(t, "invalid argument: request_read_receipt (expected boolean)", text)
+}
+
 func TestMCPUpdateDraftStale(t *testing.T) {
 	e := coretest.New(t, coretest.WithoutAutoSync())
 	ctx := t.Context()

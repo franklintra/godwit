@@ -34,14 +34,17 @@ type session struct {
 	mu               sync.Mutex // serializes the window's calls and its release
 	draftID          int64
 	quote, signature string // HTML, kept as loaded
+	readReceipt      bool   // kept as loaded: the page shows it, never edits it
 	loaded           bool
 	closed           bool // released: calls get ErrNoDraft
 	gone             bool // sent: calls get ErrNoDraft, nothing to release
 }
 
-// adopt keeps d's quote and signature as the ones the page does not edit.
+// adopt keeps d's quote, signature and read receipt as the ones the page
+// does not edit.
 func (s *session) adopt(d core.Draft) (editable string) {
 	editable, s.quote, s.signature = mail.SplitDraft(d.HTML)
+	s.readReceipt = d.ReadReceipt
 	s.loaded = true
 	return editable
 }
@@ -258,7 +261,7 @@ func (p *ComposePage) Load(ctx context.Context) (ComposeState, error) {
 	}
 	out := ComposeState{SignatureHTML: sig, Wit: wit, DraftID: d.ID, Accounts: accs, From: d.AccountID, To: nz(d.To), Cc: nz(d.Cc), Bcc: nz(d.Bcc),
 		ReplyTo: d.ReplyTo, Subject: d.Subject, Body: editable, Quote: mail.HTMLToText(s.quote),
-		Attachments: attachments(d), Revision: d.Revision,
+		Attachments: attachments(d), Headers: headers(d), ReadReceipt: d.ReadReceipt, Revision: d.Revision,
 		UpdatedAt: d.UpdatedAt.UnixMilli(), Theme: ThemeOf(st), Locale: i18n.Language(), FromProgram: d.FromProgram}
 	if !d.ScheduledFor.IsZero() {
 		out.ScheduledFor = d.ScheduledFor.UnixMilli()
@@ -311,6 +314,7 @@ func (p *ComposePage) Save(ctx context.Context, e ComposeEdit) (SaveResult, erro
 	d.To, d.Cc, d.Bcc, d.ReplyTo, d.Subject = e.To, e.Cc, e.Bcc, e.ReplyTo, e.Subject
 	// A marker in the body would pass for the quote or the signature.
 	d.HTML = mail.JoinDraft(mail.StripMarkers(e.Body), s.quote, s.signature)
+	d.ReadReceipt = s.readReceipt // SaveDraft writes it: keep what the page shows
 	d.Revision = e.Revision
 	if saveHook != nil {
 		saveHook()
@@ -538,6 +542,14 @@ func attachments(d core.Draft) []Attachment {
 	out := []Attachment{}
 	for _, a := range d.Attachments {
 		out = append(out, Attachment{ID: a.ID, Filename: a.Filename, Size: a.Size})
+	}
+	return out
+}
+
+func headers(d core.Draft) []Header {
+	out := []Header{}
+	for _, h := range d.Headers {
+		out = append(out, Header{Name: h.Name, Value: h.Value})
 	}
 	return out
 }

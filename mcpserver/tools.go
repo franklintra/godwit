@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -43,10 +44,10 @@ var tools = []tool{
 		`{"type":"object","properties":{"account_id":{"type":"integer","minimum":1}},"required":["account_id"],"additionalProperties":false}`, listDrafts},
 	{"get_draft", "Get a draft: recipients, subject, its editable body, the quoted mail and the signature, and its revision (update_draft needs it).", true,
 		draftArgs, getDraft},
-	{"create_draft", "Create a draft for the user to review and send; it is not sent. For a reply give reply_to_message_id (and reply_all to answer everyone): the draft is in that message's account, addressed and quoted for you, and to, cc and subject override only if given. A new draft needs to and subject and uses account_id or the default account. body is plain text.", false,
-		`{"type":"object","properties":{"to":{"type":"array","items":{"type":"string"}},"cc":{"type":"array","items":{"type":"string"}},"subject":{"type":"string"},"body":{"type":"string"},"account_id":{"type":"integer","minimum":1},"reply_to_message_id":{"type":"integer","minimum":1},"reply_all":{"type":"boolean"}},"required":["body"],"additionalProperties":false}`, createDraft},
-	{"update_draft", "Change a draft's subject, to, cc or plain-text body; fields left out stay as they are, and the quote and signature are kept. revision is the draft's from get_draft: if the draft changed since, nothing is saved; read it again.", false,
-		`{"type":"object","properties":{"draft_id":{"type":"integer","minimum":1},"revision":{"type":"integer","minimum":1},"subject":{"type":"string"},"to":{"type":"array","items":{"type":"string"}},"cc":{"type":"array","items":{"type":"string"}},"body":{"type":"string"}},"required":["draft_id","revision"],"additionalProperties":false}`, updateDraft},
+	{"create_draft", "Create a draft for the user to review and send; it is not sent. For a reply give reply_to_message_id (and reply_all to answer everyone): the draft is in that message's account, addressed and quoted for you, and to, cc and subject override only if given. A new draft needs to and subject and uses account_id or the default account. body is plain text. bcc adds blind-copy recipients and reply_to sets the address replies go to; request_read_receipt asks the recipients for a read receipt, sent back to the sending account's own address. headers adds header fields the sent message carries (to tag it, so a reply can be matched to it later). The user sees all of these before sending.", false,
+		`{"type":"object","properties":{"to":{"type":"array","items":{"type":"string"}},"cc":{"type":"array","items":{"type":"string"}},"subject":{"type":"string"},"body":{"type":"string"},"account_id":{"type":"integer","minimum":1},"reply_to_message_id":{"type":"integer","minimum":1},"reply_all":{"type":"boolean"},` + extraArgs + `},"required":["body"],"additionalProperties":false}`, createDraft},
+	{"update_draft", "Change a draft's subject, to, cc, bcc, reply_to (\"\" removes it), request_read_receipt, plain-text body or headers (which replace all of its header fields; {} removes them); fields left out stay as they are, and the quote and signature are kept. revision is the draft's from get_draft: if the draft changed since, nothing is saved; read it again.", false,
+		`{"type":"object","properties":{"draft_id":{"type":"integer","minimum":1},"revision":{"type":"integer","minimum":1},"subject":{"type":"string"},"to":{"type":"array","items":{"type":"string"}},"cc":{"type":"array","items":{"type":"string"}},"body":{"type":"string"},` + extraArgs + `},"required":["draft_id","revision"],"additionalProperties":false}`, updateDraft},
 	{"send_draft", "Ask Godwit to send a draft as it is at revision (from get_draft). The user's Send through MCP setting decides: off fails; confirm (the default) returns at once while Godwit asks the user, who may decline; direct queues it in the outbox. If the draft changed since revision, nothing is sent; read it again.", false,
 		`{"type":"object","properties":{"draft_id":{"type":"integer","minimum":1},"revision":{"type":"integer","minimum":1}},"required":["draft_id","revision"],"additionalProperties":false}`, sendDraft},
 	{"set_reply_deadline", "Sets or clears the date by which the sender wants your reply to a conversation that is waiting on you. Needs the message that asks for it; a quote must appear word for word in that message. Stored only on this device and shown with its source; it reorders the user's views and never sends, moves or changes mail. It cannot replace or clear a date the user set.", false,
@@ -439,13 +440,22 @@ func getDraft(ctx context.Context, c *rpc.Client, args json.RawMessage) (string,
 	return b.String(), nil
 }
 
+// extraArgs are create_draft's and update_draft's properties beyond the
+// basics: bcc, reply_to, request_read_receipt and headers.
+var extraArgs = `"bcc":{"type":"array","items":{"type":"string"}},"reply_to":{"type":"string"},"request_read_receipt":{"type":"boolean"},"headers":{"type":"object","additionalProperties":{"type":"string"},"maxProperties":` + strconv.Itoa(mail.MaxHeaders) +
+	`,"description":"header fields by name, such as {\"X-Tracking-ID\": \"abc\"}; fields Godwit writes (addresses, subject, date, threading, MIME) and ones that redirect replies or receipts are refused"}`
+
 // edit is the draft fields create_draft and update_draft change; nil leaves
 // one as it is.
 type edit struct {
-	To      *[]string `json:"to"`
-	Cc      *[]string `json:"cc"`
-	Subject *string   `json:"subject"`
-	Body    *string   `json:"body"`
+	To          *[]string          `json:"to"`
+	Cc          *[]string          `json:"cc"`
+	Bcc         *[]string          `json:"bcc"`
+	ReplyTo     *string            `json:"reply_to"`
+	ReadReceipt *bool              `json:"request_read_receipt"`
+	Subject     *string            `json:"subject"`
+	Body        *string            `json:"body"`
+	Headers     *map[string]string `json:"headers"`
 }
 
 // apply merges e into d. The body replaces the editable part only; the quote
@@ -457,12 +467,27 @@ func (e edit) apply(d *core.Draft) {
 	if e.Cc != nil {
 		d.Cc = *e.Cc
 	}
+	if e.Bcc != nil {
+		d.Bcc = *e.Bcc
+	}
+	if e.ReplyTo != nil {
+		d.ReplyTo = *e.ReplyTo
+	}
+	if e.ReadReceipt != nil {
+		d.ReadReceipt = *e.ReadReceipt
+	}
 	if e.Subject != nil {
 		d.Subject = *e.Subject
 	}
 	if e.Body != nil {
 		_, quote, sig := mail.SplitDraft(d.HTML)
 		d.HTML = mail.JoinDraft(paragraphs(*e.Body), quote, sig)
+	}
+	if e.Headers != nil { // a JSON object has no order: by name
+		d.Headers = []mail.Header{} // not nil, which would keep the stored ones
+		for _, name := range slices.Sorted(maps.Keys(*e.Headers)) {
+			d.Headers = append(d.Headers, mail.Header{Name: name, Value: (*e.Headers)[name]})
+		}
 	}
 }
 
@@ -620,11 +645,18 @@ func draft(b *strings.Builder, d core.Draft, full bool) {
 		fmt.Fprintf(b, " to message %d", d.SourceMessageID)
 	}
 	fmt.Fprintf(b, " · revision %d · saved %s\n", d.Revision, stamp(d.UpdatedAt))
+	if d.ReadReceipt {
+		b.WriteString("read receipt requested, to the sending account's address\n")
+	}
 	id := fmt.Sprintf("draft-%d", d.ID)
 	untrusted(b, id, "to", strings.Join(d.To, ", "))
 	untrusted(b, id, "cc", strings.Join(d.Cc, ", "))
 	untrusted(b, id, "bcc", strings.Join(d.Bcc, ", "))
+	untrusted(b, id, "reply_to", d.ReplyTo)
 	untrusted(b, id, "subject", d.Subject)
+	for _, h := range d.Headers { // a mailto: link's may come from mail
+		untrusted(b, id, "header", h.Name+": "+h.Value)
+	}
 	if !full {
 		return
 	}

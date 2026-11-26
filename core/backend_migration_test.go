@@ -66,6 +66,8 @@ var toPreBackendSchema = []string{
 	`ALTER TABLE outbox DROP COLUMN send_at`,
 	`ALTER TABLE drafts DROP COLUMN from_program`,
 	`ALTER TABLE drafts DROP COLUMN scheduled_for`,
+	`ALTER TABLE drafts DROP COLUMN headers`,
+	`ALTER TABLE drafts DROP COLUMN read_receipt`,
 	`DROP TABLE thread_deadlines`,
 	`ALTER TABLE archive_marks DROP COLUMN archived_at`,
 	`ALTER TABLE archive_marks DROP COLUMN archived_version`,

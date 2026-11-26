@@ -136,6 +136,8 @@ const state: ComposeState = {
   quote: "",
   signatureHtml: "",
   attachments: [],
+  headers: [],
+  readReceipt: false,
   revision: 7,
   updatedAt: 0,
   theme: { mode: "light", light: {}, dark: {}, fontSize: 14, bodyFontSize: 14 },
@@ -246,6 +248,8 @@ const change = (body: string, revision: number): BodyChange => ({
   body,
   conflict: false,
   attachments: [],
+  headers: [],
+  readReceipt: false,
   signatureHtml: "",
   updatedAt: 0,
   fromProgram: true, // Wit's edit marks the draft (ADR 0043)

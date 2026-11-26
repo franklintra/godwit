@@ -156,7 +156,16 @@ func (a *App) mcpSendDialog(c *ui.Context) {
 				}
 			})
 		}
+		if d.ReplyTo != "" { // replies go there
+			field(i18n.T("compose.reply_to"), func() { ui.Text(c, d.ReplyTo).FontWeight(500).Selectable() })
+		}
 		field(i18n.T("compose.subject"), func() { ui.Text(c, d.Subject).Selectable() })
+		if d.ReadReceipt {
+			field(i18n.T("compose.read_receipt"), func() { ui.Text(c, i18n.T("compose.read_receipt.on")) })
+		}
+		for _, h := range d.Headers { // sent with it
+			field(h.Name, func() { ui.Text(c, h.Value).Selectable() })
+		}
 		ui.Text(c, mail.HTMLToText(d.HTML)).Selectable().Padding(th.Space(3), 0, 0, 0).BorderWidth(theme.Hairline, 0, 0, 0).BorderColor(t.Border)
 		draftAttachments(c, d.Attachments)
 	}, func() {

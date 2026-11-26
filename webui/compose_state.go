@@ -15,6 +15,13 @@ type Attachment struct {
 	Size     int    `json:"size"`
 }
 
+// Header is a header field the draft adds to its message (core.Draft.Headers).
+type Header struct {
+	// Name and Value are the field as sent.
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
 // ComposeState is what a compose page shows when it opens.
 type ComposeState struct {
 	// DraftID is the window's draft; Accounts are the senders to pick from.
@@ -37,6 +44,12 @@ type ComposeState struct {
 	SignatureHTML string `json:"signatureHtml"`
 	// Attachments are the draft's files.
 	Attachments []Attachment `json:"attachments"`
+	// Headers are the draft's own header fields, shown read-only: the page
+	// saves without them, and core keeps them.
+	Headers []Header `json:"headers"`
+	// ReadReceipt: the message asks for a read receipt to the sending
+	// account's address; shown read-only, and saves keep it.
+	ReadReceipt bool `json:"readReceipt"`
 	// Revision is what the next save must pass; Theme styles the page.
 	Revision int64 `json:"revision"`
 	Theme    Theme `json:"theme"`
