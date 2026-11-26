@@ -107,7 +107,7 @@ func TestDraftHeaderPlaceholders(t *testing.T) {
 	d, err := e.s.NewDraft(bg, e.acc.ID, "new", 0)
 	require.NoError(t, err)
 	d.To, d.HTML = []string{"bob@example.com"}, "<p>hi</p>"
-	d.Headers = []mail.Header{{"X-Card", "card " + p}}
+	d.Headers = []mail.Header{{Name: "X-Card", Value: "card " + p}}
 	d, err = e.s.SaveDraft(bg, d)
 	require.NoError(t, err)
 	shown := d
@@ -122,7 +122,7 @@ func TestDraftHeaderPlaceholders(t *testing.T) {
 	for name, v := range map[string]string{"placeholder": "{{BANK_CARD_aaaaaaaaaaaa}}", "link": linkRefPrefix + "zoom.us/j?m=999&h=0000000000000000"} {
 		d, err := e.s.NewDraft(bg, e.acc.ID, "new", 0)
 		require.NoError(t, err)
-		d.To, d.HTML, d.Headers = []string{"bob@example.com"}, "<p>hi</p>", []mail.Header{{"X-V", v}}
+		d.To, d.HTML, d.Headers = []string{"bob@example.com"}, "<p>hi</p>", []mail.Header{{Name: "X-V", Value: v}}
 		d, err = e.s.SaveDraft(bg, d)
 		require.NoError(t, err)
 		err = e.s.Send(bg, d.ID)
