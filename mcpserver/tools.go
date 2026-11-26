@@ -43,10 +43,10 @@ var tools = []tool{
 		`{"type":"object","properties":{"account_id":{"type":"integer","minimum":1}},"required":["account_id"],"additionalProperties":false}`, listDrafts},
 	{"get_draft", "Get a draft: recipients, subject, its editable body, the quoted mail and the signature, and its revision (update_draft needs it).", true,
 		draftArgs, getDraft},
-	{"create_draft", "Create a draft for the user to review and send; it is not sent. For a reply give reply_to_message_id (and reply_all to answer everyone): the draft is in that message's account, addressed and quoted for you, and to, cc and subject override only if given. A new draft needs to and subject and uses account_id or the default account. body is plain text.", false,
-		`{"type":"object","properties":{"to":{"type":"array","items":{"type":"string"}},"cc":{"type":"array","items":{"type":"string"}},"subject":{"type":"string"},"body":{"type":"string"},"account_id":{"type":"integer","minimum":1},"reply_to_message_id":{"type":"integer","minimum":1},"reply_all":{"type":"boolean"}},"required":["body"],"additionalProperties":false}`, createDraft},
-	{"update_draft", "Change a draft's subject, to, cc or plain-text body; fields left out stay as they are, and the quote and signature are kept. revision is the draft's from get_draft: if the draft changed since, nothing is saved; read it again.", false,
-		`{"type":"object","properties":{"draft_id":{"type":"integer","minimum":1},"revision":{"type":"integer","minimum":1},"subject":{"type":"string"},"to":{"type":"array","items":{"type":"string"}},"cc":{"type":"array","items":{"type":"string"}},"body":{"type":"string"}},"required":["draft_id","revision"],"additionalProperties":false}`, updateDraft},
+	{"create_draft", "Create a draft for the user to review and send; it is not sent. For a reply give reply_to_message_id (and reply_all to answer everyone): the draft is in that message's account, addressed and quoted for you, and to, cc and subject override only if given. A new draft needs to and subject and uses account_id or the default account. body is plain text. format is how it is sent: html (HTML with a text version) or plain (text only); left out, the user's default for the account.", false,
+		`{"type":"object","properties":{"to":{"type":"array","items":{"type":"string"}},"cc":{"type":"array","items":{"type":"string"}},"subject":{"type":"string"},"body":{"type":"string"},"account_id":{"type":"integer","minimum":1},"reply_to_message_id":{"type":"integer","minimum":1},"reply_all":{"type":"boolean"},"format":` + formatArg + `},"required":["body"],"additionalProperties":false}`, createDraft},
+	{"update_draft", "Change a draft's subject, to, cc, plain-text body or format (html or plain); fields left out stay as they are, and the quote and signature are kept. revision is the draft's from get_draft: if the draft changed since, nothing is saved; read it again.", false,
+		`{"type":"object","properties":{"draft_id":{"type":"integer","minimum":1},"revision":{"type":"integer","minimum":1},"subject":{"type":"string"},"to":{"type":"array","items":{"type":"string"}},"cc":{"type":"array","items":{"type":"string"}},"body":{"type":"string"},"format":` + formatArg + `},"required":["draft_id","revision"],"additionalProperties":false}`, updateDraft},
 	{"send_draft", "Ask Godwit to send a draft as it is at revision (from get_draft). The user's Send through MCP setting decides: off fails; confirm (the default) returns at once while Godwit asks the user, who may decline; direct queues it in the outbox. If the draft changed since revision, nothing is sent; read it again.", false,
 		`{"type":"object","properties":{"draft_id":{"type":"integer","minimum":1},"revision":{"type":"integer","minimum":1}},"required":["draft_id","revision"],"additionalProperties":false}`, sendDraft},
 	{"set_reply_deadline", "Sets or clears the date by which the sender wants your reply to a conversation that is waiting on you. Needs the message that asks for it; a quote must appear word for word in that message. Stored only on this device and shown with its source; it reorders the user's views and never sends, moves or changes mail. It cannot replace or clear a date the user set.", false,
@@ -61,6 +61,9 @@ var shows = []show{
 }
 
 const draftArgs = `{"type":"object","properties":{"draft_id":{"type":"integer","minimum":1}},"required":["draft_id"],"additionalProperties":false}`
+
+// formatArg is a draft's format (core.Draft.Format) as a tool argument.
+const formatArg = `{"type":"string","enum":["` + core.FormatHTML + `","` + core.FormatPlain + `"]}`
 
 func listAccounts(ctx context.Context, c *rpc.Client, _ json.RawMessage) (string, error) {
 	var accs []core.Account
@@ -446,11 +449,15 @@ type edit struct {
 	Cc      *[]string `json:"cc"`
 	Subject *string   `json:"subject"`
 	Body    *string   `json:"body"`
+	Format  *string   `json:"format"`
 }
 
 // apply merges e into d. The body replaces the editable part only; the quote
-// and signature stay.
+// and signature stay. A plain draft keeps the body's text as it is.
 func (e edit) apply(d *core.Draft) {
+	if e.Format != nil {
+		d.Format = *e.Format
+	}
 	if e.To != nil {
 		d.To = *e.To
 	}
@@ -461,8 +468,12 @@ func (e edit) apply(d *core.Draft) {
 		d.Subject = *e.Subject
 	}
 	if e.Body != nil {
+		body := paragraphs(*e.Body)
+		if d.Format == core.FormatPlain {
+			body = mail.PlainHTML(*e.Body)
+		}
 		_, quote, sig := mail.SplitDraft(d.HTML)
-		d.HTML = mail.JoinDraft(paragraphs(*e.Body), quote, sig)
+		d.HTML = mail.JoinDraft(body, quote, sig)
 	}
 }
 
@@ -619,7 +630,7 @@ func draft(b *strings.Builder, d core.Draft, full bool) {
 	if d.SourceMessageID != 0 {
 		fmt.Fprintf(b, " to message %d", d.SourceMessageID)
 	}
-	fmt.Fprintf(b, " · revision %d · saved %s\n", d.Revision, stamp(d.UpdatedAt))
+	fmt.Fprintf(b, " · %s · revision %d · saved %s\n", d.Format, d.Revision, stamp(d.UpdatedAt))
 	id := fmt.Sprintf("draft-%d", d.ID)
 	untrusted(b, id, "to", strings.Join(d.To, ", "))
 	untrusted(b, id, "cc", strings.Join(d.Cc, ", "))
@@ -629,9 +640,13 @@ func draft(b *strings.Builder, d core.Draft, full bool) {
 		return
 	}
 	ed, quote, sig := mail.SplitDraft(d.HTML)
-	untrusted(b, id, "body", mail.HTMLToText(ed))
-	untrusted(b, id, "quote", mail.HTMLToText(quote))
-	untrusted(b, id, "signature", mail.HTMLToText(sig))
+	text := mail.HTMLToText
+	if d.Format == core.FormatPlain { // the text as it is sent
+		text = mail.PlainText
+	}
+	untrusted(b, id, "body", text(ed))
+	untrusted(b, id, "quote", text(quote))
+	untrusted(b, id, "signature", text(sig))
 	for _, at := range d.Attachments {
 		fmt.Fprintf(b, "attachment %d · %d bytes\n", at.ID, at.Size)
 		untrusted(b, id, "attachment_name", at.Filename)

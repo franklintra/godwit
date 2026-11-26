@@ -698,3 +698,44 @@ func TestMCPSearchContacts(t *testing.T) {
 	none := ok(t, cs, "search_contacts", map[string]any{"query": "nobody-matches-this"})
 	assert.Equal(t, "no contacts found", none)
 }
+
+// A draft of an account whose default is plain text stays plain: its body
+// keeps the text as given, get_draft says so. format switches it, and a
+// create_draft may ask for either.
+func TestMCPPlainDrafts(t *testing.T) {
+	e := coretest.New(t, coretest.WithoutAutoSync())
+	ctx := t.Context()
+	alice := e.AddAccount(t, "alice@example.com")
+	plain := core.FormatPlain
+	_, err := e.Svc.UpdateAccount(ctx, alice.ID, core.AccountPatch{ComposeFormat: &plain})
+	require.NoError(t, err)
+	cs, _ := bridge(t, e)
+
+	body := "Hi Bob,\n  indented\n\n\nTwo blank lines above."
+	out := ok(t, cs, "create_draft", map[string]any{"to": []string{"bob@example.com"}, "subject": "Hi", "body": body})
+	assert.Contains(t, out, "· plain ·")
+	ds, err := e.Svc.ListDrafts(ctx, alice.ID)
+	require.NoError(t, err)
+	require.Len(t, ds, 1)
+	d := ds[0]
+	assert.Equal(t, core.FormatPlain, d.Format)
+	ed, _, _ := mail.SplitDraft(d.HTML)
+	assert.Equal(t, body, mail.PlainText(ed))
+
+	ok(t, cs, "update_draft", map[string]any{"draft_id": d.ID, "revision": d.Revision, "format": "html"})
+	d, err = e.Svc.GetDraft(ctx, d.ID)
+	require.NoError(t, err)
+	assert.Equal(t, core.FormatHTML, d.Format)
+
+	ok(t, cs, "create_draft", map[string]any{"to": []string{"bob@example.com"}, "subject": "Hi", "body": "b", "format": "html"})
+	ds, err = e.Svc.ListDrafts(ctx, alice.ID)
+	require.NoError(t, err)
+	formats := map[string]int{}
+	for _, d := range ds {
+		formats[d.Format]++
+	}
+	assert.Equal(t, map[string]int{core.FormatHTML: 2}, formats)
+
+	text, isErr := call(t, cs, "create_draft", map[string]any{"to": []string{"bob@example.com"}, "subject": "Hi", "body": "b", "format": "rtf"})
+	assert.True(t, isErr, text)
+}
