@@ -18,7 +18,7 @@ concurrency:
 jobs:
   app:
     if: github.repository != 'godwit-email/godwit'
-    runs-on: macos-latest
+    runs-on: macos-15 # arm64; macos-latest found no runner (capacity)
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
