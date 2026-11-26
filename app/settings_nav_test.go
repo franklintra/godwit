@@ -12,7 +12,7 @@ import (
 var pageDescs = map[string]string{
 	"general": "settings.general.sub", "signatures": "settings.signatures.sub", "labels": "settings.labels.sub", "rules": "settings.rules.sub",
 	"models": "settings.models.desc", "features": "settings.ai.sub", "skills": "settings.skills.sub", "mcp": "settings.mcp.sub", "plugins": "settings.plugins.sub", "clients": "settings.clients.sub",
-	"masking": "settings.privacy.sub", "security": "settings.security.sub", "images": "settings.remote_images.sub", "blocked": "settings.blocked.sub", "labs": "settings.labs.sub",
+	"masking": "settings.privacy.sub", "security": "settings.security.sub", "images": "settings.remote_images.sub", "network": "settings.network.sub", "blocked": "settings.blocked.sub", "labs": "settings.labs.sub",
 }
 
 // Every page's key, the old routes included, opens a page of the sidebar and
@@ -55,7 +55,7 @@ func TestSettingsSidebarGroups(t *testing.T) {
 	h, _ := withAccount(t)
 	h.resize(1440, 1600)
 	h.openSettings("about")
-	want := []string{"账户", "应用", "通用", "签名", "标签", "规则", "智能与扩展", "模型", "AI 功能", "Skill", "MCP", "插件", "接入 AI 应用", "隐私与安全", "隐私脱敏", "发件人安全", "远程图片", "已屏蔽的发件人", "实验室", "关于"}
+	want := []string{"账户", "应用", "通用", "签名", "标签", "规则", "智能与扩展", "模型", "AI 功能", "Skill", "MCP", "插件", "接入 AI 应用", "隐私与安全", "隐私脱敏", "发件人安全", "远程图片", "网络隐私", "已屏蔽的发件人", "实验室", "关于"}
 	texts := h.tt.Texts()
 	at := 0
 	for _, w := range want {

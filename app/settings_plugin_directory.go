@@ -30,6 +30,14 @@ func (e *extView) directoryView(c *ui.Context) {
 				})
 				kit.Button(c, i18n.T("common.retry"), kit.ButtonOpts{Size: kit.SizeSm, Variant: kit.Outline}).OnClick(e.refreshRegistry)
 			})
+		case len(e.reg.Entries) == 0 && !e.a.settings.PluginRegistry: // never fetched: 网络隐私 keeps it from fetching by itself
+			kit.Block(c, ui.Row(c), kit.ToneCard).FillWidth().Gap(th.Space(6)).Padding(th.Space(3), th.Space(4)).AlignItems(ui.Center).Children(func() {
+				ui.Column(c).Grow(1).Shrink(1).Gap(th.Space(0.5)).Children(func() {
+					kit.Text(c, i18n.T("settings.ext.directory.paused"), t.Text.Sm).FontWeight(500)
+					kit.Text(c, i18n.T("settings.ext.directory.paused.hint"), t.Text.Xs).TextColor(t.Muted)
+				})
+				kit.Button(c, i18n.T("settings.ext.directory.update"), kit.ButtonOpts{Size: kit.SizeSm, Variant: kit.Outline}).OnClick(e.refreshRegistry)
+			})
 		case len(e.reg.Entries) == 0:
 			ui.Text(c, i18n.T("settings.ext.registry.empty")).TextColor(t.Muted)
 		default:
@@ -47,10 +55,18 @@ func (e *extView) directoryView(c *ui.Context) {
 			})
 		}
 		foot := i18n.T("settings.ext.no_send")
-		if e.reg.Stale != "" && len(e.reg.Entries) > 0 {
+		switch {
+		case e.reg.Stale != "" && len(e.reg.Entries) > 0:
 			foot = i18n.T("settings.ext.registry.stale") + " " + foot
+		case !e.a.settings.PluginRegistry && len(e.reg.Entries) > 0:
+			foot = i18n.T("settings.ext.registry.paused") + " " + foot
 		}
 		kit.Text(c, foot, t.Text.Xs).TextColor(t.Muted).PaddingX(th.Space(4))
+		if !e.a.settings.PluginRegistry && len(e.reg.Entries) > 0 {
+			if kit.Button(c, i18n.T("settings.ext.directory.update"), kit.ButtonOpts{Size: kit.SizeSm, Variant: kit.Outline}).AlignSelf(ui.Start).Margin(0, 0, 0, th.Space(4)).Clicked() {
+				e.refreshRegistry()
+			}
+		}
 	})
 	e.installDialog(c)
 }

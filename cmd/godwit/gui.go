@@ -305,6 +305,9 @@ func gui(ctx context.Context, dataDir, open string) int {
 		sig.SetService(client)
 		uiLang := "" // keep the database preference authoritative over MyGo's saved locale
 		st, err := client.GetSettings(ctx)
+		if err == nil {
+			st = adoptUpdateChecks(ctx, client, st)
+		}
 		start := func() {
 			if err != nil {
 				log.Printf("reading settings: %v; the menus use the system language", err)

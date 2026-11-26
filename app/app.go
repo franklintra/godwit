@@ -396,8 +396,12 @@ func (a *App) watchLatest() {
 }
 
 // readLatest asks the update feed for a newer version, for the sidebar's
-// update card and About's button.
+// update card and About's button; not while automatic update checks are
+// off (Settings.UpdateChecks), when only Check for Updates asks.
 func (a *App) readLatest() {
+	if !a.settings.UpdateChecks {
+		return
+	}
 	var v string
 	var auto bool
 	a.do(func(ctx context.Context) (err error) {

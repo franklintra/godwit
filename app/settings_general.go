@@ -20,9 +20,10 @@ import (
 )
 
 // avatarSettingsChanged reports whether a settings change can affect whether
-// or how remote sender avatars load (remote-image policy or proxy).
+// or how remote sender avatars load (remote-image policy, their sources or proxy).
 func avatarSettingsChanged(old, st core.Settings) bool {
 	return st.RemoteImages != old.RemoteImages ||
+		st.Gravatar != old.Gravatar || st.Favicons != old.Favicons || st.BIMI != old.BIMI ||
 		st.ProxyMode != old.ProxyMode ||
 		st.ProxyURL != old.ProxyURL ||
 		!slices.Equal(st.ProxyBypass, old.ProxyBypass) ||
@@ -98,6 +99,9 @@ func (a *App) settingsEffects(old, st core.Settings) {
 	}
 	if st.Theme != old.Theme {
 		a.plat.SetThemeSource(st.Theme)
+	}
+	if st.UpdateChecks && !old.UpdateChecks {
+		a.readLatest() // what was skipped while they were off
 	}
 	if on := opensAtLogin(st); on != opensAtLogin(old) {
 		plat := a.plat
