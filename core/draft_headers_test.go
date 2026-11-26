@@ -22,10 +22,10 @@ func TestDraftHeadersSavedAndSent(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, d.Headers)
 	d.To, d.Subject, d.HTML = []string{"bob@example.com"}, "hello", "<p>hi</p>"
-	d.Headers = []mail.Header{{"x-hermes-session", "abc"}, {"X-Note", "café"}}
+	d.Headers = []mail.Header{{Name: "x-hermes-session", Value: "abc"}, {Name: "X-Note", Value: "café"}}
 	d, err = e.s.SaveDraft(bg, d)
 	require.NoError(t, err)
-	want := []mail.Header{{"X-Hermes-Session", "abc"}, {"X-Note", "café"}}
+	want := []mail.Header{{Name: "X-Hermes-Session", Value: "abc"}, {Name: "X-Note", Value: "café"}}
 	assert.Equal(t, want, d.Headers)
 
 	rev := d.Revision
@@ -35,10 +35,10 @@ func TestDraftHeadersSavedAndSent(t *testing.T) {
 	assert.Equal(t, want, d.Headers, "nil keeps them")
 	assert.Equal(t, rev+1, d.Revision)
 
-	d.Headers = []mail.Header{{"X-Hermes-Session", "def"}}
+	d.Headers = []mail.Header{{Name: "X-Hermes-Session", Value: "def"}}
 	d, err = e.s.SaveDraft(bg, d)
 	require.NoError(t, err)
-	assert.Equal(t, []mail.Header{{"X-Hermes-Session", "def"}}, d.Headers, "a list replaces them")
+	assert.Equal(t, []mail.Header{{Name: "X-Hermes-Session", Value: "def"}}, d.Headers, "a list replaces them")
 	assert.Equal(t, rev+2, d.Revision, "a header change is a new revision: an approval of the old one fails")
 
 	require.NoError(t, e.s.Send(bg, d.ID))
@@ -57,9 +57,9 @@ func TestDraftHeadersSavedAndSent(t *testing.T) {
 
 func TestDraftHeadersCleared(t *testing.T) {
 	e := newSendEnv(t, false)
-	d, err := e.s.SaveDraft(bg, Draft{AccountID: e.acc.ID, Mode: "new", Headers: []mail.Header{{"X-A", "1"}}})
+	d, err := e.s.SaveDraft(bg, Draft{AccountID: e.acc.ID, Mode: "new", Headers: []mail.Header{{Name: "X-A", Value: "1"}}})
 	require.NoError(t, err)
-	assert.Equal(t, []mail.Header{{"X-A", "1"}}, d.Headers, "set on insert")
+	assert.Equal(t, []mail.Header{{Name: "X-A", Value: "1"}}, d.Headers, "set on insert")
 	d.Headers = []mail.Header{}
 	d, err = e.s.SaveDraft(bg, d)
 	require.NoError(t, err)
@@ -73,12 +73,12 @@ func TestDraftHeadersRefused(t *testing.T) {
 	e := newSendEnv(t, false)
 	d, err := e.s.NewDraft(bg, e.acc.ID, "new", 0)
 	require.NoError(t, err)
-	d.Headers = []mail.Header{{"X-Ok", "1"}}
+	d.Headers = []mail.Header{{Name: "X-Ok", Value: "1"}}
 	d, err = e.s.SaveDraft(bg, d)
 	require.NoError(t, err)
 	for _, h := range []mail.Header{
-		{"Bcc", "eve@example.com"}, {"Reply-To", "eve@example.com"}, {"Message-ID", "<x@y>"},
-		{"X-A", "1\r\nBcc: eve@example.com"}, {"X-A\nBcc", "eve@example.com"}, {mail.RuleHeader, "1"},
+		{Name: "Bcc", Value: "eve@example.com"}, {Name: "Reply-To", Value: "eve@example.com"}, {Name: "Message-ID", Value: "<x@y>"},
+		{Name: "X-A", Value: "1\r\nBcc: eve@example.com"}, {Name: "X-A\nBcc", Value: "eve@example.com"}, {Name: mail.RuleHeader, Value: "1"},
 	} {
 		bad := d
 		bad.Subject, bad.Headers = "changed", []mail.Header{h}
@@ -91,7 +91,7 @@ func TestDraftHeadersRefused(t *testing.T) {
 	now, err := e.s.GetDraft(bg, d.ID)
 	require.NoError(t, err)
 	assert.Equal(t, d.Revision, now.Revision)
-	assert.Equal(t, []mail.Header{{"X-Ok", "1"}}, now.Headers)
+	assert.Equal(t, []mail.Header{{Name: "X-Ok", Value: "1"}}, now.Headers)
 	assert.Equal(t, 1, e.count(t, "SELECT count(*) FROM drafts"))
 }
 
