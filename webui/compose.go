@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	netmail "net/mail"
 	"path/filepath"
 	"sync"
 	"time"
@@ -256,10 +257,14 @@ func (p *ComposePage) Load(ctx context.Context) (ComposeState, error) {
 	if err != nil {
 		return ComposeState{}, err
 	}
+	pgp, err := openpgpOf(ctx, svc, d)
+	if err != nil {
+		return ComposeState{}, err
+	}
 	out := ComposeState{SignatureHTML: sig, Wit: wit, DraftID: d.ID, Accounts: accs, From: d.AccountID, To: nz(d.To), Cc: nz(d.Cc), Bcc: nz(d.Bcc),
 		ReplyTo: d.ReplyTo, Subject: d.Subject, Body: editable, Quote: mail.HTMLToText(s.quote),
 		Attachments: attachments(d), Revision: d.Revision,
-		UpdatedAt: d.UpdatedAt.UnixMilli(), Theme: ThemeOf(st), Locale: i18n.Language(), FromProgram: d.FromProgram}
+		UpdatedAt: d.UpdatedAt.UnixMilli(), Theme: ThemeOf(st), Locale: i18n.Language(), FromProgram: d.FromProgram, OpenPGP: pgp}
 	if !d.ScheduledFor.IsZero() {
 		out.ScheduledFor = d.ScheduledFor.UnixMilli()
 	}
@@ -343,6 +348,62 @@ func (p *ComposePage) SetAccount(ctx context.Context, id, revision int64) (Chang
 	}
 	s.adopt(d)
 	return changeOf(ctx, svc, d)
+}
+
+// SetOpenPGP sets whether the calling window's draft is signed and how it
+// is encrypted (core.OpenPGPEncryptOff, Auto or On); revision must be the
+// stored one, else Conflict.
+func (p *ComposePage) SetOpenPGP(ctx context.Context, sign bool, encrypt string, revision int64) (Change, error) {
+	_, svc, s, err := p.open(ctx)
+	if err != nil {
+		return Change{}, err
+	}
+	defer s.mu.Unlock()
+	d, err := svc.SetDraftOpenPGP(ctx, s.draftID, revision, core.DraftOpenPGP{Sign: sign, Encrypt: encrypt})
+	if errors.Is(err, core.ErrStaleDraft) {
+		return conflict, nil
+	}
+	if err != nil {
+		return Change{}, err
+	}
+	return changeOf(ctx, svc, d)
+}
+
+// OpenPGPMissing lists the addresses among addrs with no valid OpenPGP key
+// in the user's keyring, which a message cannot be encrypted to. It reads
+// the local keyring only; an address that does not parse yet is skipped.
+func (p *ComposePage) OpenPGPMissing(ctx context.Context, addrs []string) ([]string, error) {
+	_, svc, s, err := p.open(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Unlock() // gpg may take a moment: saves need not wait for it
+	var valid []string
+	for _, a := range addrs {
+		if _, err := netmail.ParseAddress(a); err == nil {
+			valid = append(valid, a)
+		}
+	}
+	keys, err := svc.OpenPGPRecipientKeys(ctx, valid)
+	if err != nil {
+		return nil, err
+	}
+	out := []string{}
+	for _, k := range keys {
+		if k.Key == "" {
+			out = append(out, k.Address)
+		}
+	}
+	return out, nil
+}
+
+// openpgpOf is d's OpenPGP choices for the page.
+func openpgpOf(ctx context.Context, svc Service, d core.Draft) (OpenPGP, error) {
+	a, err := svc.AccountOpenPGP(ctx, d.AccountID)
+	if err != nil {
+		return OpenPGP{}, err
+	}
+	return OpenPGP{Available: a.Key != "", Sign: d.OpenPGP.Sign, Encrypt: d.OpenPGP.Encrypt}, nil
 }
 
 // AddAttachments asks for files in a dialog on the calling window and adds
@@ -529,8 +590,12 @@ var conflict = Change{Conflict: true, Attachments: []Attachment{}}
 func changeOf(ctx context.Context, svc Service, d core.Draft) (Change, error) {
 	_, _, sig := mail.SplitDraft(d.HTML)
 	shown, err := svc.SignatureShown(ctx, sig)
+	if err != nil {
+		return Change{}, err
+	}
+	pgp, err := openpgpOf(ctx, svc, d)
 	return Change{Revision: d.Revision, Attachments: attachments(d), SignatureHTML: shown,
-		UpdatedAt: d.UpdatedAt.UnixMilli()}, err
+		UpdatedAt: d.UpdatedAt.UnixMilli(), OpenPGP: pgp}, err
 }
 
 // attachments is d's attachments for the page, never nil.

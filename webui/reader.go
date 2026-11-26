@@ -445,6 +445,13 @@ func (r *Reader) build(ctx context.Context, svc Service, message int64, state *b
 	} else if m, err = r.getMessage(ctx, svc, message, allowed); err != nil {
 		return ReaderBody{}, err
 	}
+	if core.OpenPGPKind(m) == "encrypted" {
+		// The user's gpg decrypts it for this page only (ADR 0045); the header
+		// says whether it could. Remote images stay blocked in decrypted mail.
+		if v, err := svc.OpenPGPMessage(ctx, message); err == nil && v.Decrypted {
+			m.HTML, m.Text, m.RemoteImagesBlocked, m.Truncated, allowed = v.HTML, v.Text, 0, false, false
+		}
+	}
 	st, err := svc.GetSettings(ctx)
 	if err != nil {
 		return ReaderBody{}, err

@@ -72,6 +72,8 @@ type settingsPage struct {
 	importErr     error                                                                          // ImportAccounts's failure
 	update        func(ctx context.Context, id int64, p core.AccountPatch) (core.Account, error) // tests swap it
 
+	openpgp openpgpView // the account pages' OpenPGP section
+
 	clients   map[string]mcpclients.State // 接入 AI 应用: how each AI app stands, as last read
 	logFilter maskLogFilter               // what 脱敏记录 lists
 

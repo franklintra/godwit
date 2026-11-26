@@ -14,6 +14,8 @@ vi.mock("@/mygo", () => ({
     closed: vi.fn(),
     latest: vi.fn(),
     setAccount: vi.fn(),
+    setOpenPGP: vi.fn(),
+    openPGPMissing: vi.fn(),
     addAttachments: vi.fn(),
     removeAttachment: vi.fn(),
     send: vi.fn(),
@@ -94,6 +96,7 @@ const state = {
   attachments: [],
   revision: 7,
   updatedAt: new Date(2026, 9, 10, 9, 5).getTime(),
+  openpgp: { available: false, sign: false, encrypt: "off" },
   scheduledFor: 0,
   theme,
   locale: "zh-Hans",
@@ -611,6 +614,7 @@ test("account switch keeps body", async () => {
     conflict: false,
     signatureHtml: '<p>-- work</p><img src="data:image/png;base64,AAAA">',
     updatedAt: new Date(2026, 9, 10, 11, 42).getTime(),
+    openpgp: { available: false, sign: false, encrypt: "off" },
   });
   render(<ComposePage />);
   const el = await body();
@@ -640,6 +644,42 @@ test("a signature laid out with a table shows as its HTML, table kept", async ()
   expect(screen.getByText("CEO").tagName).toBe("TD");
 });
 
+test("OpenPGP: the menu signs and encrypts, and names the recipients without a key (ADR 0045)", async () => {
+  const pgp = (encrypt: string) => ({ available: true, sign: true, encrypt });
+  vi.mocked(api.load).mockResolvedValue({ ...state, openpgp: pgp("auto") });
+  vi.mocked(api.openPGPMissing).mockResolvedValue(["a@x.com"]);
+  vi.mocked(api.setOpenPGP).mockResolvedValue({
+    revision: 8,
+    attachments: [],
+    conflict: false,
+    signatureHtml: "<p>-- me</p>",
+    updatedAt: 0,
+    openpgp: pgp("on"),
+  });
+  render(<ComposePage />);
+  await body();
+  const button = screen.getByRole("button", { name: "OpenPGP" });
+  expect(button).toHaveTextContent("已签名"); // auto, a key missing: signed only
+  await waitFor(() => expect(api.openPGPMissing).toHaveBeenCalledWith(["a@x.com"]));
+  expect(await screen.findByText("没有 a@x.com 的密钥：将不加密发送")).toBeInTheDocument();
+  vi.mocked(api.popupMenu).mockImplementationOnce(async (entries) => {
+    expect(entries.find((e) => e.id === "sign")?.checked).toBe(true);
+    expect(entries.find((e) => e.id === "encrypt:auto")?.checked).toBe(true);
+    return "encrypt:on";
+  });
+  await userEvent.click(button);
+  await waitFor(() => expect(api.setOpenPGP).toHaveBeenCalledWith(true, "on", 7));
+  expect(await screen.findByText("没有 a@x.com 的密钥：无法加密发送")).toBeInTheDocument();
+  expect(button).toHaveTextContent("已签名 · 已加密");
+});
+
+test("OpenPGP is hidden while the account has no key", async () => {
+  render(<ComposePage />);
+  await body();
+  expect(screen.queryByRole("button", { name: "OpenPGP" })).not.toBeInTheDocument();
+  expect(api.openPGPMissing).not.toHaveBeenCalled();
+});
+
 test("an account switch that conflicts reverts the pill", async () => {
   vi.mocked(api.setAccount).mockResolvedValue({
     revision: 0,
@@ -647,6 +687,7 @@ test("an account switch that conflicts reverts the pill", async () => {
     conflict: true,
     signatureHtml: "",
     updatedAt: 0,
+    openpgp: { available: false, sign: false, encrypt: "off" },
   });
   render(<ComposePage />);
   await body();
@@ -672,6 +713,7 @@ test("attachments: add reports oversize, × removes", async () => {
     tooLarge: ["big.zip"],
     failed: ["bad.bin"],
     updatedAt: new Date(2026, 9, 10, 11, 43).getTime(),
+    openpgp: { available: false, sign: false, encrypt: "off" },
   });
   vi.mocked(api.removeAttachment).mockResolvedValue({
     revision: 10,
@@ -679,6 +721,7 @@ test("attachments: add reports oversize, × removes", async () => {
     conflict: false,
     signatureHtml: "<p>-- me</p>",
     updatedAt: 0,
+    openpgp: { available: false, sign: false, encrypt: "off" },
   });
   render(<ComposePage />);
   await body();
@@ -800,6 +843,7 @@ test("a conflict stopping the adding part way still lists the files added", asyn
     conflict: true,
     signatureHtml: "<p>-- me</p>",
     updatedAt: 0,
+    openpgp: { available: false, sign: false, encrypt: "off" },
     tooLarge: [],
     failed: [],
   });

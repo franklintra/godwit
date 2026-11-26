@@ -14,6 +14,13 @@ import (
 // Service is the subset of the mail engine the native UI calls.
 type Service interface {
 	AccountIcon(ctx context.Context, id int64) (core.AccountIcon, error)
+	// OpenPGP through the user's gpg (ADR 0045).
+	AccountOpenPGP(ctx context.Context, accountID int64) (core.AccountOpenPGP, error)
+	OpenPGPKeys(ctx context.Context) ([]core.OpenPGPKey, error)
+	OpenPGPMessage(ctx context.Context, messageID int64) (core.OpenPGPView, error)
+	OpenPGPStatus(ctx context.Context) (core.GPGInfo, error)
+	SetAccountOpenPGP(ctx context.Context, accountID int64, o core.AccountOpenPGP) (core.AccountOpenPGP, error)
+	SetGPGPath(ctx context.Context, path string) (core.GPGInfo, error)
 	AddAccount(ctx context.Context, in core.AccountInput) (core.Account, error)
 	AddLocalArchive(ctx context.Context, name string) (core.Account, error)
 	AddMCPServer(ctx context.Context, in core.MCPServerInput) (core.MCPServer, error)

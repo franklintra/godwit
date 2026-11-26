@@ -138,6 +138,7 @@ const state: ComposeState = {
   attachments: [],
   revision: 7,
   updatedAt: 0,
+  openpgp: { available: false, sign: false, encrypt: "off" },
   theme: { mode: "light", light: {}, dark: {}, fontSize: 14, bodyFontSize: 14 },
   locale: "zh-Hans",
   wit: { enabled: true, translateOnly: false, skills: [], languages: [], chips: [], model: "" },
@@ -248,6 +249,7 @@ const change = (body: string, revision: number): BodyChange => ({
   attachments: [],
   signatureHtml: "",
   updatedAt: 0,
+  openpgp: { available: false, sign: false, encrypt: "off" },
   fromProgram: true, // Wit's edit marks the draft (ADR 0043)
 });
 const ev = (e: Partial<WitEvent>): WitEvent => ({

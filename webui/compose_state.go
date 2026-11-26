@@ -51,6 +51,18 @@ type ComposeState struct {
 	// FromProgram is core.Draft.FromProgram: a program wrote or changed the
 	// draft, so the page asks the user to check it before sending (ADR 0043).
 	FromProgram bool `json:"fromProgram"`
+	// OpenPGP is how the draft is signed and encrypted when sent.
+	OpenPGP OpenPGP `json:"openpgp"`
+}
+
+// OpenPGP is a draft's OpenPGP choices as the page shows them (ADR 0045).
+type OpenPGP struct {
+	// Available: the sending account has an OpenPGP key, so the page offers
+	// the choices; without one they are off.
+	Available bool `json:"available"`
+	// Sign and Encrypt are core.DraftOpenPGP's: Encrypt is off, auto or on.
+	Sign    bool   `json:"sign"`
+	Encrypt string `json:"encrypt"`
 }
 
 // ComposeEdit is what the page saves: the fields it edits, and the revision
@@ -86,6 +98,9 @@ type Change struct {
 	SignatureHTML string `json:"signatureHtml"`
 	// UpdatedAt is when the draft was last stored, in Unix milliseconds.
 	UpdatedAt int64 `json:"updatedAt"`
+	// OpenPGP is the draft's after the change: another account may have
+	// another key, or none.
+	OpenPGP OpenPGP `json:"openpgp"`
 }
 
 // AttachResult is the outcome of adding files: a partial success is no error.

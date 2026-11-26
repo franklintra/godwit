@@ -17,6 +17,10 @@ func (cl *Client) AccountIcon(ctx context.Context, id int64) (core.AccountIcon, 
 	return call[core.AccountIcon](cl, ctx, "AccountIcon", id)
 }
 
+func (cl *Client) AccountOpenPGP(ctx context.Context, accountID int64) (core.AccountOpenPGP, error) {
+	return call[core.AccountOpenPGP](cl, ctx, "AccountOpenPGP", accountID)
+}
+
 func (cl *Client) AddAccount(ctx context.Context, in core.AccountInput) (core.Account, error) {
 	return call[core.Account](cl, ctx, "AddAccount", in)
 }
@@ -513,6 +517,22 @@ func (cl *Client) NewMailtoDraft(ctx context.Context, accountID int64, link stri
 	return call[core.Draft](cl, ctx, "NewMailtoDraft", accountID, link)
 }
 
+func (cl *Client) OpenPGPKeys(ctx context.Context) ([]core.OpenPGPKey, error) {
+	return call[[]core.OpenPGPKey](cl, ctx, "OpenPGPKeys")
+}
+
+func (cl *Client) OpenPGPMessage(ctx context.Context, messageID int64) (core.OpenPGPView, error) {
+	return call[core.OpenPGPView](cl, ctx, "OpenPGPMessage", messageID)
+}
+
+func (cl *Client) OpenPGPRecipientKeys(ctx context.Context, addrs []string) ([]core.OpenPGPRecipient, error) {
+	return call[[]core.OpenPGPRecipient](cl, ctx, "OpenPGPRecipientKeys", addrs)
+}
+
+func (cl *Client) OpenPGPStatus(ctx context.Context) (core.GPGInfo, error) {
+	return call[core.GPGInfo](cl, ctx, "OpenPGPStatus")
+}
+
 func (cl *Client) PendingLabels(ctx context.Context) (int, error) {
 	return call[int](cl, ctx, "PendingLabels")
 }
@@ -785,6 +805,10 @@ func (cl *Client) SenderAvatar(ctx context.Context, messageID int64, allowRemote
 	return call[core.Avatar](cl, ctx, "SenderAvatar", messageID, allowRemote)
 }
 
+func (cl *Client) SetAccountOpenPGP(ctx context.Context, accountID int64, o core.AccountOpenPGP) (core.AccountOpenPGP, error) {
+	return call[core.AccountOpenPGP](cl, ctx, "SetAccountOpenPGP", accountID, o)
+}
+
 func (cl *Client) SetAddressBookCollectionEnabled(ctx context.Context, collectionID int64, enabled bool) error {
 	return callErr(cl, ctx, "SetAddressBookCollectionEnabled", collectionID, enabled)
 }
@@ -801,8 +825,16 @@ func (cl *Client) SetDraftModel(ctx context.Context, draftID int64, model string
 	return callErr(cl, ctx, "SetDraftModel", draftID, model)
 }
 
+func (cl *Client) SetDraftOpenPGP(ctx context.Context, draftID int64, revision int64, o core.DraftOpenPGP) (core.Draft, error) {
+	return call[core.Draft](cl, ctx, "SetDraftOpenPGP", draftID, revision, o)
+}
+
 func (cl *Client) SetFlags(ctx context.Context, ids []int64, add []string, remove []string) error {
 	return callErr(cl, ctx, "SetFlags", ids, add, remove)
+}
+
+func (cl *Client) SetGPGPath(ctx context.Context, path string) (core.GPGInfo, error) {
+	return call[core.GPGInfo](cl, ctx, "SetGPGPath", path)
 }
 
 func (cl *Client) SetLabel(ctx context.Context, messageIDs []int64, labelID int64, on bool) error {

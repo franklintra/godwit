@@ -150,6 +150,29 @@
   "scheduled_note": "Godwit sends scheduled mail only while it is running, in a window or in the background. If it is not running at the time, the message goes out the next time Godwit starts.",
   "outbox_state_scheduled": "Sends {arg1}",
   "compose_send_later": "Send later…",
+  "compose_openpgp": "OpenPGP",
+  "compose_openpgp_signed": "Signed",
+  "compose_openpgp_encrypted": "Encrypted",
+  "compose_openpgp_sign": "Sign",
+  "compose_openpgp_encrypt_off": "Don’t encrypt",
+  "compose_openpgp_encrypt_auto": "Encrypt when possible",
+  "compose_openpgp_encrypt_on": "Always encrypt",
+  "compose_openpgp_missing_auto": "No key for {arg1}: it goes unencrypted",
+  "@compose_openpgp_missing_auto": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "compose_openpgp_missing_on": "No key for {arg1}: it cannot be sent encrypted",
+  "@compose_openpgp_missing_on": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
   "compose_send_options": "Send options",
   "compose_send_now": "Send now",
   "compose_schedule_again": "Schedule again for {arg1}",
@@ -1166,6 +1189,60 @@
       }
     }
   },
+  "reader_openpgp_checking": "Checking OpenPGP…",
+  "reader_openpgp_verified": "Signed by {arg1}",
+  "@reader_openpgp_verified": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "reader_openpgp_unverified": "Signed by {arg1}, key not verified",
+  "@reader_openpgp_unverified": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "reader_openpgp_not_sender": "Signed by {arg1}, not the sender",
+  "@reader_openpgp_not_sender": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "reader_openpgp_key_expired": "Signed by {arg1}, key expired or revoked",
+  "@reader_openpgp_key_expired": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "reader_openpgp_unknown_key": "Signed with an unknown key ({arg1})",
+  "@reader_openpgp_unknown_key": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "reader_openpgp_bad": "Bad signature: changed after signing",
+  "reader_openpgp_error": "OpenPGP could not be checked",
+  "reader_openpgp_decrypted": "Decrypted",
+  "reader_openpgp_no_secret_key": "Encrypted, not to your keys",
+  "reader_openpgp_decrypt_failed": "Not decrypted: {arg1}",
+  "@reader_openpgp_decrypt_failed": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "reader_openpgp_partial": "Only part of this message is signed or encrypted.",
   "reader_trackers_tip": "Tracking pixels tell the sender when you open a message. Godwit always blocks them, even for senders you trust.",
   "reader_truncated": "This message is too long; only the beginning is shown",
   "reader_trust": "Trust sender",
@@ -1324,6 +1401,17 @@
   "settings_account_mailbox_trash_help": "Deleted mail moves here first",
   "settings_account_label_keywords": "Sync labels as IMAP keywords",
   "settings_account_label_keywords_help": "Labels you set show to other mail apps and tools on the server, and their keywords show here as labels. The server must allow custom keywords.",
+  "settings_account_openpgp_help": "Godwit signs and encrypts with your own GnuPG: your keys stay in your keyring, gpg asks for your passphrase, and no key is looked up online.",
+  "settings_account_openpgp_gpg_missing": "Not found. Install GnuPG, or choose the gpg program.",
+  "settings_account_openpgp_gpg_choose": "Choose…",
+  "settings_account_openpgp_gpg_reset": "Find automatically",
+  "settings_account_openpgp_key": "Signing key",
+  "settings_account_openpgp_key_help": "The secret key this account signs with. Your copy of each encrypted message is encrypted to it too.",
+  "settings_account_openpgp_key_none": "None",
+  "settings_account_openpgp_sign": "Sign new messages",
+  "settings_account_openpgp_sign_help": "Recipients can check that a message is from you and was not changed.",
+  "settings_account_openpgp_encrypt": "Encrypt when possible",
+  "settings_account_openpgp_encrypt_help": "Encrypt a new message when every recipient has a valid key in your keyring.",
   "settings_account_make_default": "Default sending account",
   "settings_account_make_default_help": "Used when writing from All Inboxes",
   "settings_account_name": "Sender name",
@@ -4060,6 +4148,9 @@
   "settings_account_archive_usage_help": "Imported original mail and attachments",
   "settings_account_archive_remove_help": "Deletes all of this archive’s mail and the imported original files for good. This cannot be undone.",
   "error_local_archive": "A local archive cannot send or sync mail.",
+  "error_gpg_not_found": "GnuPG (gpg) was not found. Install GnuPG, or choose the gpg program in the account’s OpenPGP settings.",
+  "error_openpgp_no_key": "This account has no OpenPGP key. Choose one in the account’s settings.",
+  "error_openpgp_downgrade": "Only you can turn a draft’s signing or encryption off.",
   "error_not_local_archive": "Only a local archive has local folders.",
   "error_role_folder": "Inbox and Trash cannot be renamed or deleted.",
   "error_folder_not_empty": "The folder is not empty. Move its mail out first.",
