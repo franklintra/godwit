@@ -14,6 +14,7 @@ vi.mock("@/mygo", () => ({
     closed: vi.fn(),
     latest: vi.fn(),
     setAccount: vi.fn(),
+    setFormat: vi.fn(),
     addAttachments: vi.fn(),
     removeAttachment: vi.fn(),
     send: vi.fn(),
@@ -98,6 +99,7 @@ const state = {
   theme,
   locale: "zh-Hans",
   fromProgram: false,
+  format: "html",
   wit: { enabled: false, translateOnly: false, skills: [], languages: [], chips: [], model: "" },
 };
 const noWarnings = { sent: false, conflict: false, warnings: [], digest: "", blocked: null };
@@ -623,6 +625,49 @@ test("account switch keeps body", async () => {
   expect(sig?.querySelector("img")?.getAttribute("src")).toBe("data:image/png;base64,AAAA");
   expect(el).toHaveValue("正文!");
   await waitFor(() => expect(api.titleBar).toHaveBeenLastCalledWith("你好", "草稿已保存 · 11:42"));
+});
+
+test("switches the body to plain text and back, saving first", async () => {
+  const change = (format: string, body: string, revision: number) => ({
+    revision,
+    attachments: [],
+    conflict: false,
+    signatureHtml: "-- \nme",
+    updatedAt: state.updatedAt,
+    accounts: state.accounts,
+    from: 1,
+    quote: "> 原文",
+    to: state.to,
+    cc: [],
+    bcc: [],
+    replyTo: "",
+    subject: state.subject,
+    body,
+    fromProgram: false,
+    format,
+  });
+  vi.mocked(api.setFormat)
+    .mockResolvedValueOnce(change("plain", "<p>正文!</p><p>  第二段</p>", 9))
+    .mockResolvedValueOnce(change("html", "<p>a<br>b</p>", 11));
+  render(<ComposePage />);
+  fireEvent.change(await body(), { target: { value: "正文!" } });
+  await userEvent.click(screen.getByRole("button", { name: "纯文本" }));
+  await waitFor(() => expect(api.setFormat).toHaveBeenCalledWith("plain", 8));
+  expect(api.save).toHaveBeenCalledWith(expect.objectContaining({ body: "正文!" }));
+  expect(order(vi.mocked(api.save))).toBeLessThan(order(vi.mocked(api.setFormat)));
+  const plain = await body();
+  expect(plain).toHaveValue("正文!\n\n  第二段");
+  expect(plain).toHaveClass("font-mono");
+  const sig = screen.getByText(/^-- /).closest('[data-slot="signature-preview"]');
+  expect(sig).toHaveClass("whitespace-pre-wrap");
+  expect(screen.getByRole("button", { name: "纯文本" })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByRole("button", { name: "纯文本" })).toBeEnabled();
+
+  fireEvent.change(plain, { target: { value: "a\nb" } });
+  await userEvent.click(screen.getByRole("button", { name: "纯文本" }));
+  await waitFor(() => expect(api.setFormat).toHaveBeenLastCalledWith("html", expect.any(Number)));
+  expect(api.save).toHaveBeenLastCalledWith(expect.objectContaining({ body: "<p>a<br>b</p>" }));
+  expect(await body()).toHaveValue("<p>a<br>b</p>"); // the rich editor (mocked) on the HTML
 });
 
 test("a signature laid out with a table shows as its HTML, table kept", async () => {

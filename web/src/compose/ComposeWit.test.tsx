@@ -140,6 +140,7 @@ const state: ComposeState = {
   updatedAt: 0,
   theme: { mode: "light", light: {}, dark: {}, fontSize: 14, bodyFontSize: 14 },
   locale: "zh-Hans",
+  format: "html",
   wit: { enabled: true, translateOnly: false, skills: [], languages: [], chips: [], model: "" },
 } as unknown as ComposeState;
 const empty: Legacy = {
@@ -249,6 +250,7 @@ const change = (body: string, revision: number): BodyChange => ({
   signatureHtml: "",
   updatedAt: 0,
   fromProgram: true, // Wit's edit marks the draft (ADR 0043)
+  format: "html",
 });
 const ev = (e: Partial<WitEvent>): WitEvent => ({
   conversation: 1,

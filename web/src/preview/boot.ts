@@ -58,6 +58,8 @@ const pages: Record<string, { states: string[]; entry: () => Promise<unknown>; s
       const scheduledFor = state === "reschedule" ? Date.now() + 86_400_000 : 0;
       let revision = 1;
       let followed = false;
+      let format = "html"; // the format switch's, as Go would store it
+
       const body = () => (revision > 1 || withBody ? fx.compose(mode, true).body : "");
       const changed = (): BodyChange => {
         const { accounts, from, quote, to, cc, bcc, replyTo, subject } = fx.compose(mode, true);
@@ -77,6 +79,7 @@ const pages: Record<string, { states: string[]; entry: () => Promise<unknown>; s
           replyTo,
           subject,
           fromProgram: revision > 1 || state === "program", // Wit's edit marks the draft
+          format,
         };
       };
       const history = () =>
@@ -152,6 +155,11 @@ const pages: Record<string, { states: string[]; entry: () => Promise<unknown>; s
         "ComposePage.DecideAll": async () => changed(),
         "ComposePage.Finish": async () => changed(),
         "ComposePage.Undo": async () => changed(),
+        "ComposePage.SetFormat": async (f: string) => {
+          format = f;
+          revision++;
+          return changed();
+        },
         // warned: a plugin's warning answers 发送; conflict: the draft changed elsewhere
         "ComposePage.Send": async () => ({
           sent: false,
