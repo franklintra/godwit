@@ -7,8 +7,7 @@ branches, merged for one local build. Upstream PRs come from the feature branche
 
 - Base: upstream v1.40.2 (`a6040c1`), the fork's `main`.
 - Merged, in this order: `feat/headers`, `feat/privacy`, `feat/server-drafts`, `feat/identities`,
-  `feat/automation`, `feat/openpgp`.
-- Still to merge: `feat/plaintext`.
+  `feat/automation`, `feat/openpgp`, `feat/plaintext`.
 
 Each feature branch stays based on upstream, so it can become an upstream PR on its own. To add one:
 
@@ -20,7 +19,7 @@ Each feature branch stays based on upstream, so it can become an upstream PR on 
    (see `core/store/draft_headers_migration_test.go`).
 3. Renumber its ADR if the number is taken, and fix the references (`git grep 'ADR 00xx'`). The fork
    uses 0045 headers, 0046 network privacy, 0047 server drafts, 0048 identities, 0049 open from outside
-   (automation) and 0050 OpenPGP.
+   (automation), 0050 OpenPGP and 0051 plain-text drafts.
 4. Regenerate `uiclient/client_gen.go` (`go generate ./uiclient`) and `mcpserver/views/draft.html`
    (`cd web && bun run views`) if the merge changed their inputs, then run the checks in "Checks".
 
