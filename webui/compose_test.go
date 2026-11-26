@@ -284,7 +284,7 @@ func TestComposeBoundSurface(t *testing.T) {
 	}
 	sort.Strings(names)
 	assert.Equal(t, []string{"AddAttachments", "Answer", "Ask", "CheckCited", "Closed", "Decide", "DecideAll", "DecideWithArgs", "Finish", "Follow", "Latest", "Load",
-		"Models", "OpenCited", "OpenLink", "OpenModels", "PopupMenu", "RemoveAttachment", "Review", "Rewrite", "Save", "SearchContacts", "SearchMail", "Send", "SendLater", "SetAccount",
+		"Models", "OpenCited", "OpenLink", "OpenModels", "PopupMenu", "RemoveAttachment", "Review", "Rewrite", "Save", "SearchContacts", "SearchMail", "Send", "SendLater", "SetAccount", "SetFormat",
 		"SetModel", "Skill", "Stop", "TitleBar", "Toast", "ToastBar", "Undo", "WitInfo"}, names)
 }
 
@@ -770,4 +770,47 @@ func TestComposePopupMenu(t *testing.T) {
 	id, err = p.PopupMenu(t.Context(), entries, 0, 0)
 	assert.ErrorIs(t, err, ErrNoDraft)
 	assert.Equal(t, "", id)
+}
+
+// SetFormat turns the window's draft plain and back: a plain draft's body is
+// its text's paragraphs, its quote the "> " lines it is sent with and its
+// signature text; a save of the page's text keeps it plain. A stale
+// revision is a Conflict.
+func TestComposeSetFormat(t *testing.T) {
+	f := newFixture(t, coretest.WithoutAutoSync())
+	d := f.replyDraft(t)
+	f.c.Attach(1, d.ID)
+	st, err := f.page.Load(f.ctx(1))
+	require.NoError(t, err)
+	assert.Equal(t, core.FormatHTML, st.Format)
+	res, err := f.page.Save(f.ctx(1), ComposeEdit{To: st.To, Subject: st.Subject, Body: "<p><b>Sure</b>, see <a href=\"https://e.com\">this</a></p>", Revision: st.Revision})
+	require.NoError(t, err)
+
+	stale, err := f.page.SetFormat(f.ctx(1), core.FormatPlain, st.Revision)
+	require.NoError(t, err)
+	assert.True(t, stale.Conflict)
+	_, err = f.page.SetFormat(f.ctx(1), "rtf", res.Revision)
+	require.Error(t, err)
+
+	ch, err := f.page.SetFormat(f.ctx(1), core.FormatPlain, res.Revision)
+	require.NoError(t, err)
+	require.False(t, ch.Conflict)
+	assert.Equal(t, core.FormatPlain, ch.Format)
+	assert.Equal(t, mail.PlainHTML("Sure, see this (https://e.com)"), ch.Body)
+	assert.Regexp(t, `(?m)^> the plan$`, ch.Quote)
+	assert.Equal(t, "Alice\nGodwit", ch.SignatureHTML, "the text it is sent as, for a pre-wrap block")
+	assert.Greater(t, ch.Revision, res.Revision)
+
+	res, err = f.page.Save(f.ctx(1), ComposeEdit{To: st.To, Subject: st.Subject, Body: mail.PlainHTML("Sure.\n\n  Two spaces"), Revision: ch.Revision})
+	require.NoError(t, err)
+	st, err = f.page.Load(f.ctx(1))
+	require.NoError(t, err)
+	assert.Equal(t, core.FormatPlain, st.Format)
+	assert.Equal(t, "Sure.\n\n  Two spaces", mail.PlainText(st.Body))
+
+	ch, err = f.page.SetFormat(f.ctx(1), core.FormatHTML, res.Revision)
+	require.NoError(t, err)
+	assert.Equal(t, core.FormatHTML, ch.Format)
+	assert.Equal(t, mail.PlainHTML("Sure.\n\n  Two spaces"), ch.Body, "the paragraphs, now HTML")
+	assert.Contains(t, ch.SignatureHTML, "Godwit")
 }
