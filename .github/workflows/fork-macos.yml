@@ -25,11 +25,12 @@ jobs:
   app:
     if: github.repository != 'godwit-email/godwit'
     # Two images: hosted macOS arm64 runners are often short, so the first
-    # to get one wins; both upload. macos-latest found none for 15 minutes.
+    # to get one wins; each uploads. The arm64 pool found none for 15 minutes,
+    # twice, so an Intel image cross-builds the arm64 app too.
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-15, macos-26]
+        os: [macos-15, macos-26, macos-15-intel] # intel cross-builds arm64
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     steps:
