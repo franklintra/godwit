@@ -29,6 +29,9 @@ type Outgoing struct {
 	// Headers are the draft's own fields (Draft.Headers), written in order
 	// after Godwit's; Build refuses what CheckHeaders refuses.
 	Headers []Header
+	// ReadReceipt asks the recipients' clients for a read receipt
+	// (Disposition-Notification-To, RFC 8098), always to From.
+	ReadReceipt bool
 }
 
 // RuleHeader marks mail a Godwit rule forwarded; mail carrying it is never
@@ -80,6 +83,9 @@ func Build(o Outgoing, now time.Time) (raw []byte, messageID string, err error) 
 	h.SetSubject(o.Subject)
 	h.SetMessageID(messageID)
 	h.SetAddressList("From", []*gomail.Address{from})
+	if o.ReadReceipt { // the sender's own address, never another
+		h.SetAddressList("Disposition-Notification-To", []*gomail.Address{from})
+	}
 	for _, f := range []struct {
 		key string
 		v   []string

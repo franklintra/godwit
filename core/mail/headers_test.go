@@ -135,3 +135,20 @@ func TestBuildHeaders(t *testing.T) {
 		assert.True(t, errors.As(err, &he), "%q", h)
 	}
 }
+
+// A read receipt goes to From, the only address Build will put there.
+func TestBuildReadReceipt(t *testing.T) {
+	o := mail.Outgoing{From: "Alice Liddell <alice@x.com>", To: []string{"a@y.com"}, HTML: "<p>hi</p>", ReadReceipt: true}
+	raw, _, err := mail.Build(o, time.Now())
+	require.NoError(t, err)
+	m, err := netmail.ReadMessage(bytes.NewReader(raw))
+	require.NoError(t, err)
+	got, err := m.Header.AddressList("Disposition-Notification-To")
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "alice@x.com", got[0].Address)
+	o.ReadReceipt = false
+	raw, _, err = mail.Build(o, time.Now())
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "Disposition-Notification-To")
+}

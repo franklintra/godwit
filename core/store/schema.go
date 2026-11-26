@@ -906,6 +906,9 @@ var Migrations = [][]string{{
 	// A draft's own header fields, sent after Godwit's: a JSON array of
 	// {"Name","Value"} as mail.CheckHeaders left them, in order.
 	`ALTER TABLE drafts ADD COLUMN headers TEXT NOT NULL DEFAULT '[]'`,
+	// 1: the message asks for a read receipt to the sending account's own
+	// address (Disposition-Notification-To).
+	`ALTER TABLE drafts ADD COLUMN read_receipt INTEGER NOT NULL DEFAULT 0`,
 }}
 
 // HistoryRowsVersion is the schema version that keeps a conversation's

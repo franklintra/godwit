@@ -144,3 +144,35 @@ func TestMailtoDraftHeaders(t *testing.T) {
 	assert.NotContains(t, d.Headers[1].Value, linkRefPrefix)
 	assert.Equal(t, []string{"eve@example.com"}, d.Bcc, "bcc is the draft's Bcc, shown in its field")
 }
+
+// A read receipt is a draft field, sent as Disposition-Notification-To to
+// the sending account's address; a save with false drops it.
+func TestDraftReadReceipt(t *testing.T) {
+	e := newSendEnv(t, false)
+	d, err := e.s.NewDraft(bg, e.acc.ID, "new", 0)
+	require.NoError(t, err)
+	d.To, d.HTML, d.ReadReceipt = []string{"bob@example.com"}, "<p>hi</p>", true
+	d, err = e.s.SaveDraft(bg, d)
+	require.NoError(t, err)
+	assert.True(t, d.ReadReceipt)
+	d.Subject = "receipt"
+	d, err = e.s.SaveDraft(bg, d)
+	require.NoError(t, err)
+	assert.True(t, d.ReadReceipt, "a save from GetDraft keeps it")
+	require.NoError(t, e.s.Send(bg, d.ID))
+	raw, err := os.ReadFile(store.Str(e.rows(t, "SELECT raw_path FROM outbox")[0][0]))
+	require.NoError(t, err)
+	m, err := netmail.ReadMessage(bytes.NewReader(raw))
+	require.NoError(t, err)
+	got, err := m.Header.AddressList("Disposition-Notification-To")
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "alice@example.com", got[0].Address)
+
+	d2, err := e.s.SaveDraft(bg, Draft{AccountID: e.acc.ID, Mode: "new", ReadReceipt: true})
+	require.NoError(t, err)
+	d2.ReadReceipt = false
+	d2, err = e.s.SaveDraft(bg, d2)
+	require.NoError(t, err)
+	assert.False(t, d2.ReadReceipt)
+}

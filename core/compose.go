@@ -39,6 +39,10 @@ type Draft struct {
 	// ReplyTo). SaveDraft keeps the stored ones when Headers is nil and
 	// replaces them otherwise, so an empty list removes them.
 	Headers []mail.Header
+	// ReadReceipt asks the recipients for a read receipt, sent back to the
+	// sending account's own address (Disposition-Notification-To); no other
+	// address can be named, which is why the header itself is refused.
+	ReadReceipt bool
 	// Revision grows by one on every update, an attachment added or removed
 	// included (refetch it after one). SaveDraft with a non-zero Revision
 	// fails with ErrStaleDraft unless it is still the stored one.
@@ -301,8 +305,8 @@ func (s *Service) copyAttachments(ctx context.Context, draftID, messageID int64)
 	return nil
 }
 
-// SaveDraft inserts d (ID 0) or updates its addresses, subject, body and,
-// unless nil, headers. The HTML is sanitized for composing (no scripts,
+// SaveDraft inserts d (ID 0) or updates its addresses, subject, body, read
+// receipt and, unless nil, headers. The HTML is sanitized for composing (no scripts,
 // handlers or remote resources); headers mail.CheckHeaders refuses fail it
 // with a *mail.HeaderError. Attachments are changed with AddAttachment and
 // RemoveAttachment.
@@ -371,9 +375,9 @@ func (s *Service) saveDraft(ctx context.Context, d Draft) (out Draft, err error)
 			return Draft{}, cmp.Or(err, ErrLocalArchive)
 		}
 		r, err := s.db.Execute(ctx, `INSERT INTO drafts(account_id, mode, source_message_id, to_addrs, cc_addrs, bcc_addrs,
-			reply_to, subject, body_html, updated_at, from_program, headers) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, '[]'))`,
+			reply_to, subject, body_html, updated_at, from_program, headers, read_receipt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, '[]'), ?)`,
 			d.AccountID, d.Mode, nullID(d.SourceMessageID), encodeList(d.To), encodeList(d.Cc), encodeList(d.Bcc),
-			d.ReplyTo, d.Subject, d.HTML, now, fromProgram(ctx), headers)
+			d.ReplyTo, d.Subject, d.HTML, now, fromProgram(ctx), headers, d.ReadReceipt)
 		if err != nil {
 			return Draft{}, err
 		}
@@ -383,9 +387,9 @@ func (s *Service) saveDraft(ctx context.Context, d Draft) (out Draft, err error)
 		return Draft{}, err
 	}
 	q, args := `UPDATE drafts SET to_addrs = ?, cc_addrs = ?, bcc_addrs = ?, reply_to = ?, subject = ?,
-		body_html = ?, headers = COALESCE(?, headers), updated_at = ?, revision = revision + 1,
+		body_html = ?, headers = COALESCE(?, headers), read_receipt = ?, updated_at = ?, revision = revision + 1,
 		from_program = MAX(from_program, ?) WHERE id = ?`,
-		[]any{encodeList(d.To), encodeList(d.Cc), encodeList(d.Bcc), d.ReplyTo, d.Subject, d.HTML, headers, now, fromProgram(ctx), d.ID}
+		[]any{encodeList(d.To), encodeList(d.Cc), encodeList(d.Bcc), d.ReplyTo, d.Subject, d.HTML, headers, d.ReadReceipt, now, fromProgram(ctx), d.ID}
 	if d.Revision != 0 {
 		q, args = q+" AND revision = ?", append(args, d.Revision)
 	}
@@ -450,7 +454,7 @@ func (s *Service) DraftForApproval(ctx context.Context, approvalID int64) (int64
 // read, covering rows stored before SaveDraft sanitized.
 func (s *Service) GetDraft(ctx context.Context, id int64) (Draft, error) {
 	rows, err := s.db.Query(ctx, `SELECT account_id, mode, source_message_id, to_addrs, cc_addrs, bcc_addrs, reply_to,
-		subject, body_html, updated_at, revision, from_program, scheduled_for, headers FROM drafts WHERE id = ?`, id)
+		subject, body_html, updated_at, revision, from_program, scheduled_for, headers, read_receipt FROM drafts WHERE id = ?`, id)
 	if err != nil {
 		return Draft{}, err
 	}
@@ -461,7 +465,8 @@ func (s *Service) GetDraft(ctx context.Context, id int64) (Draft, error) {
 	d := Draft{ID: id, AccountID: store.Int(r[0]), Mode: store.Str(r[1]), SourceMessageID: store.Int(r[2]),
 		To: jsonList(store.Str(r[3])), Cc: jsonList(store.Str(r[4])), Bcc: jsonList(store.Str(r[5])),
 		ReplyTo: store.Str(r[6]), Subject: store.Str(r[7]), UpdatedAt: time.Unix(store.Int(r[9]), 0), Revision: store.Int(r[10]),
-		FromProgram: store.Int(r[11]) != 0, ScheduledFor: unixMilli(r[12]), Headers: decodeHeaders(store.Str(r[13]))}
+		FromProgram: store.Int(r[11]) != 0, ScheduledFor: unixMilli(r[12]), Headers: decodeHeaders(store.Str(r[13])),
+		ReadReceipt: store.Int(r[14]) != 0}
 	if d.HTML, err = s.sanitizeDraft(ctx, store.Str(r[8])); err != nil {
 		return Draft{}, err
 	}
@@ -816,7 +821,8 @@ func (s *Service) enqueue(ctx context.Context, draftID, rev int64, checked []str
 		return ErrReceiveOnly
 	}
 	o := mail.Outgoing{From: (&netmail.Address{Name: acc.Name, Address: acc.Email}).String(), ReplyTo: d.ReplyTo,
-		To: d.To, Cc: d.Cc, Bcc: d.Bcc, Subject: d.Subject, HTML: d.HTML, Related: related, Headers: d.Headers}
+		To: d.To, Cc: d.Cc, Bcc: d.Bcc, Subject: d.Subject, HTML: d.HTML, Related: related, Headers: d.Headers,
+		ReadReceipt: d.ReadReceipt}
 	var stmts []sqlite.Statement
 	if rs != nil {
 		stmts = rs.stmts
