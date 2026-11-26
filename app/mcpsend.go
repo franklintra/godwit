@@ -157,6 +157,9 @@ func (a *App) mcpSendDialog(c *ui.Context) {
 			})
 		}
 		field(i18n.T("compose.subject"), func() { ui.Text(c, d.Subject).Selectable() })
+		for _, h := range d.Headers { // sent with it
+			field(h.Name, func() { ui.Text(c, h.Value).Selectable() })
+		}
 		ui.Text(c, mail.HTMLToText(d.HTML)).Selectable().Padding(th.Space(3), 0, 0, 0).BorderWidth(theme.Hairline, 0, 0, 0).BorderColor(t.Border)
 		draftAttachments(c, d.Attachments)
 	}, func() {

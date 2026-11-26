@@ -92,6 +92,8 @@
   "compose_remove": "{arg1} verwijderen",
   "compose_reply_to": "Antwoord aan",
   "compose_reply_to_input": "Antwoordadres",
+  "compose_headers": "Extra headers ({arg1})",
+  "compose_headers_help": "Worden met het bericht verzonden. Meestal voegt een programma ze toe om antwoorden later te herkennen.",
   "compose_recipients_changed": "De ontvangers zijn elders gewijzigd. Het adres dat je typt is nog niet toegevoegd: controleer de ontvangers voordat je verstuurt.",
   "compose_send": "Versturen",
   "mail_scheduled": "Gepland",

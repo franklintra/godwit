@@ -144,6 +144,15 @@
   },
   "compose_reply_to": "Reply-To",
   "compose_reply_to_input": "Reply-To address",
+  "compose_headers": "Extra headers ({arg1})",
+  "@compose_headers": {
+    "placeholders": {
+      "arg1": {
+        "type": "String"
+      }
+    }
+  },
+  "compose_headers_help": "Sent with the message. A program usually adds them to match replies later.",
   "compose_recipients_changed": "The recipients were changed elsewhere. The address you are typing has not been added yet: check the recipients before sending.",
   "compose_send": "Send",
   "mail_scheduled": "Scheduled",

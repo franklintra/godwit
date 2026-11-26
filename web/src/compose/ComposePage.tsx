@@ -33,6 +33,7 @@ import { ProgramBanner, WitBanner } from "./Banner";
 import { type CmdKSelection, Editor, type EditorHandle } from "./editor/Editor";
 import { IdleToolbar } from "./editor/Toolbar";
 import { Fields, type FieldsEdit, type FieldsHandle } from "./fields/Fields";
+import { Headers } from "./Headers";
 import { Notices } from "./Notices";
 import { CmdK } from "./review/CmdK";
 import { BODY, Review, reviewSummary, Static } from "./review/Review";
@@ -301,6 +302,7 @@ function Compose({
   const [quote, setQuote] = useState(state.quote);
   const [showQuote, setShowQuote] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>(state.attachments);
+  const [headers, setHeaders] = useState(state.headers); // read-only: saves leave them to core
   const [tooLarge, setTooLarge] = useState<string[]>([]);
   const [failed, setFailed] = useState<string[]>([]);
   // at: the Send later time (unix ms) the warnings were for; 0 for a send of now.
@@ -419,6 +421,7 @@ function Compose({
       setSignature(sigOf(l));
       setQuote(l.quote);
       setAttachments(l.attachments);
+      setHeaders(l.headers);
       setSavedAt(fmt(new Date(l.updatedAt)));
     });
     editorRef.current?.setValue(l.body);
@@ -765,6 +768,7 @@ function Compose({
         setSignature(sigOf(l));
         setQuote(l.quote);
         setAttachments(l.attachments);
+        setHeaders(l.headers);
       });
       if (mine) {
         await sv.keepMine(l.revision);
@@ -902,6 +906,7 @@ function Compose({
                 onSearch={api.searchContacts}
                 t={t}
               />
+              <Headers items={headers} t={t} />
               {/* The body: locked while Wit writes or an edit waits (typing there toasts why, once). */}
               <div ref={bodyRef} className="flex flex-col">
                 {reloadErr && (

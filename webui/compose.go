@@ -258,7 +258,7 @@ func (p *ComposePage) Load(ctx context.Context) (ComposeState, error) {
 	}
 	out := ComposeState{SignatureHTML: sig, Wit: wit, DraftID: d.ID, Accounts: accs, From: d.AccountID, To: nz(d.To), Cc: nz(d.Cc), Bcc: nz(d.Bcc),
 		ReplyTo: d.ReplyTo, Subject: d.Subject, Body: editable, Quote: mail.HTMLToText(s.quote),
-		Attachments: attachments(d), Revision: d.Revision,
+		Attachments: attachments(d), Headers: headers(d), Revision: d.Revision,
 		UpdatedAt: d.UpdatedAt.UnixMilli(), Theme: ThemeOf(st), Locale: i18n.Language(), FromProgram: d.FromProgram}
 	if !d.ScheduledFor.IsZero() {
 		out.ScheduledFor = d.ScheduledFor.UnixMilli()
@@ -538,6 +538,14 @@ func attachments(d core.Draft) []Attachment {
 	out := []Attachment{}
 	for _, a := range d.Attachments {
 		out = append(out, Attachment{ID: a.ID, Filename: a.Filename, Size: a.Size})
+	}
+	return out
+}
+
+func headers(d core.Draft) []Header {
+	out := []Header{}
+	for _, h := range d.Headers {
+		out = append(out, Header{Name: h.Name, Value: h.Value})
 	}
 	return out
 }

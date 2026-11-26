@@ -64,6 +64,7 @@ const pages: Record<string, { states: string[]; entry: () => Promise<unknown>; s
         return {
           revision,
           attachments: [],
+          headers: [],
           conflict: false,
           signatureHtml: "",
           updatedAt: Date.now(),

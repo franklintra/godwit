@@ -92,6 +92,8 @@
   "compose_remove": "Xóa {arg1}",
   "compose_reply_to": "Trả lời đến",
   "compose_reply_to_input": "Địa chỉ trả lời",
+  "compose_headers": "Tiêu đề bổ sung ({arg1})",
+  "compose_headers_help": "Được gửi kèm thư. Thường do một chương trình thêm vào để đối chiếu thư trả lời sau này.",
   "compose_recipients_changed": "Người nhận đã được thay đổi ở nơi khác. Địa chỉ bạn đang nhập chưa được thêm: hãy kiểm tra người nhận trước khi gửi.",
   "compose_send": "Gửi",
   "mail_scheduled": "Đã lên lịch",

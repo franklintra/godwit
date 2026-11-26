@@ -92,6 +92,8 @@
   "compose_remove": "{arg1} を削除",
   "compose_reply_to": "返信先",
   "compose_reply_to_input": "返信先アドレス",
+  "compose_headers": "追加ヘッダー（{arg1}）",
+  "compose_headers_help": "メッセージと一緒に送信されます。通常はプログラムが、あとで返信を照合するために追加します。",
   "compose_recipients_changed": "宛先が別の場所で変更されました。入力中のアドレスはまだ追加されていません。送信前に宛先を確認してください。",
   "compose_send": "送信",
   "mail_scheduled": "送信予定",
