@@ -297,6 +297,10 @@ func (cl *Client) FirstTimeRecipients(ctx context.Context, addrs []string) ([]st
 	return call[[]string](cl, ctx, "FirstTimeRecipients", addrs)
 }
 
+func (cl *Client) FlushServerDraft(ctx context.Context, draftID int64) error {
+	return callErr(cl, ctx, "FlushServerDraft", draftID)
+}
+
 func (cl *Client) ForgetImageFailure(urls []string) {
 	callVoid(cl, context.Background(), "ForgetImageFailure", urls)
 }
@@ -511,6 +515,10 @@ func (cl *Client) NewDraft(ctx context.Context, accountID int64, mode string, so
 
 func (cl *Client) NewMailtoDraft(ctx context.Context, accountID int64, link string) (core.Draft, error) {
 	return call[core.Draft](cl, ctx, "NewMailtoDraft", accountID, link)
+}
+
+func (cl *Client) OpenServerDraft(ctx context.Context, messageID int64) (int64, error) {
+	return call[int64](cl, ctx, "OpenServerDraft", messageID)
 }
 
 func (cl *Client) PendingLabels(ctx context.Context) (int, error) {

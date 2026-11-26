@@ -25,6 +25,7 @@ type Service interface {
 	CompactConversation(ctx context.Context, id int64) error
 	DeleteDraftIfEmpty(ctx context.Context, id, revision int64) (deleted bool, err error)
 	DraftForApproval(ctx context.Context, approvalID int64) (int64, error)
+	FlushServerDraft(ctx context.Context, draftID int64) error
 	EditProposedRule(ctx context.Context, id int64) (core.Rule, error)
 	FailQuestion(ctx context.Context, conv int64, question string, quoted []int64, reason string) error
 	ForgetImageFailure(urls []string)

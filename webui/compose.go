@@ -86,8 +86,9 @@ func (c *Compose) Detach(winID int) {
 
 // Release lets go of closed window winID: new calls from it get ErrNoDraft,
 // the call in progress finishes first, then its draft is deleted if it is
-// empty (core DeleteDraftIfEmpty, on the revision checked). Its Wit events
-// stop; a run goes on.
+// empty (core DeleteDraftIfEmpty, on the revision checked), else stored on
+// the server at once where the account keeps drafts there (core
+// FlushServerDraft). Its Wit events stop; a run goes on.
 func (c *Compose) Release(winID int) {
 	c.mu.Lock()
 	s := c.sessions[winID]
@@ -106,8 +107,12 @@ func (c *Compose) Release(winID int) {
 	}
 	ctx := context.Background()
 	d, err := svc.GetDraft(ctx, s.draftID)
+	deleted := false
 	if err == nil {
-		_, err = svc.DeleteDraftIfEmpty(ctx, d.ID, d.Revision)
+		deleted, err = svc.DeleteDraftIfEmpty(ctx, d.ID, d.Revision)
+	}
+	if err == nil && !deleted {
+		err = svc.FlushServerDraft(ctx, d.ID)
 	}
 	if err != nil {
 		log.Printf("releasing compose window %d: %v", winID, err)

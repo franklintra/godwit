@@ -46,6 +46,7 @@ var table = []Error{
 	{Code: "not_on_server_yet", Err: core.ErrNotOnServerYet},
 	{Code: "stale_draft", Err: core.ErrStaleDraft},
 	{Code: "not_program_draft", Err: core.ErrNotProgramDraft},
+	{Code: "not_server_draft", Err: core.ErrNotServerDraft},
 	{Code: "not_synced", Err: core.ErrNotSynced},
 	{Code: "run_active", Err: core.ErrRunActive},
 	{Code: "security_scan_busy", Err: core.ErrSecurityScanBusy, Key: "settings.security.rescan.busy"},
@@ -279,6 +280,9 @@ var uiOnly = map[string]bool{
 	// 批准并发送 on a program's draft (ADR 0043): the approval stands for the user's click,
 	// so no program may give it. It sends nothing SendRevision could not.
 	"ApproveDraft": true,
+	// A closed compose window's draft goes to the server at once (ADR 0045); programs' drafts
+	// follow ServerDraftIdle like any other.
+	"FlushServerDraft": true,
 	// Settings' 全部去掉 for other apps' and Wit's reply dates, the user's way out when an agent
 	// wrote many: no program wipes them in bulk, and the undo writes rows past setDeadline's checks.
 	"RemoveAppAndWitDeadlines": true, "UndoRemoveAppAndWitDeadlines": true,
