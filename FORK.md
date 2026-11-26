@@ -64,7 +64,8 @@ Tests: `core/store/fork_test.go`.
 
 `.github/workflows/fork-macos.yml` runs on a push to `franklin/integration` (and by hand once it is on
 the default branch). It runs the steps of `ci.yml`'s `package` job for `darwin/arm64` without a DMG,
-signing or notarization, and keeps `Godwit.app` as the artifact `Godwit-macOS-arm64-<sha>` for 14 days:
+signing or notarization, on `macos-15-intel` with the newest Xcode (it cross-compiles; the hosted arm64
+pool kept acquiring no runner), and keeps `Godwit.app` as the artifact `Godwit-macOS-arm64-<sha>` for 14 days:
 
 ```sh
 gh run list -R franklintra/godwit -w fork-macos.yml

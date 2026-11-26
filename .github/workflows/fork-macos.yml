@@ -16,22 +16,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Shows whether hosted runners start at all when the macOS jobs wait.
-  probe:
-    if: github.repository != 'godwit-email/godwit'
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo "hosted runners start"
   app:
     if: github.repository != 'godwit-email/godwit'
-    # Several images: hosted macOS arm64 runners are often short, so the first
-    # to get one wins; each uploads. The arm64 pool found none for 15 minutes,
-    # twice, so an Intel image cross-builds the arm64 app too.
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-15, macos-26, macos-15-intel] # intel cross-builds arm64
-    runs-on: ${{ matrix.os }}
+    # An Intel runner that cross-compiles the darwin/arm64 app (the native
+    # helpers and mygo build both target arm64 from x86_64): GitHub's hosted
+    # arm64 macOS pool (macos-15, macos-26, macos-latest) kept failing to
+    # acquire a runner ("not acquired by Runner of type hosted", 15 minutes,
+    # several runs in a row), while macos-15-intel starts at once.
+    runs-on: macos-15-intel
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
@@ -41,9 +33,9 @@ jobs:
       - uses: actions/cache@v6
         with:
           path: ${{ steps.go-cache.outputs.dir }}
-          key: fork-macos-gocache-${{ matrix.os }}-${{ hashFiles('go.sum') }}
+          key: fork-macos-gocache-intel-${{ hashFiles('go.sum') }}
           restore-keys: |
-            fork-macos-gocache-${{ matrix.os }}-
+            fork-macos-gocache-intel-
       # The same steps as ci.yml's package job, for one architecture and
       # without the DMG: MyGo signs ad hoc when MACOS_SIGNING_IDENTITY is unset.
       # The native helpers need the macOS 26 SDK (Translation, Foundation
@@ -76,7 +68,7 @@ jobs:
           echo "zip=$RUNNER_TEMP/Godwit-macOS-arm64.zip" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v7
         with:
-          name: Godwit-macOS-arm64-${{ matrix.os }}-${{ github.sha }}
+          name: Godwit-macOS-arm64-${{ github.sha }}
           path: ${{ steps.zip.outputs.zip }}
           if-no-files-found: error
           retention-days: 14
