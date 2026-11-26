@@ -323,7 +323,12 @@ func (s *Service) programChanged(ctx context.Context, err error) {
 
 // saveDraft is SaveDraft, unaudited.
 func (s *Service) saveDraft(ctx context.Context, d Draft) (out Draft, err error) {
-	defer func() { s.programChanged(ctx, err) }()
+	defer func() {
+		s.programChanged(ctx, err)
+		if err == nil {
+			s.draftChanged(ctx, out.ID)
+		}
+	}()
 	// Draft changes and Send never interleave.
 	s.editMu.Lock()
 	defer s.editMu.Unlock()
@@ -507,6 +512,7 @@ func (s *Service) addAttachment(ctx context.Context, draftID, rev int64, filenam
 	}
 	now, err := s.draftRevision(ctx, draftID)
 	s.programChanged(ctx, err)
+	s.draftChanged(ctx, draftID)
 	return DraftAttachment{ID: id, Filename: filename, ContentType: contentType, Size: len(data)}, now, err
 }
 
@@ -573,6 +579,7 @@ func (s *Service) removeAttachment(ctx context.Context, draftID, attachmentID, r
 		return 0, err
 	}
 	s.programChanged(ctx, nil) // removed: the file left behind changes nothing shown
+	s.draftChanged(ctx, draftID)
 	if err := os.Remove(store.Str(rows.Values[0][0])); err != nil && !os.IsNotExist(err) {
 		return 0, err
 	}
@@ -580,13 +587,16 @@ func (s *Service) removeAttachment(ctx context.Context, draftID, attachmentID, r
 }
 
 func (s *Service) deleteDraft(ctx context.Context, id int64) error {
-	r, err := s.db.DurableExecute(ctx, "DELETE FROM drafts WHERE id = ?", id) // attachments cascade
+	copies := s.serverDraftAccounts(ctx, id)
+	r, err := s.db.DurableExecute(ctx, "DELETE FROM drafts WHERE id = ?", id) // attachments cascade; server copies are let go
 	if err != nil {
 		return err
 	}
 	if r.Changes == 0 {
 		return fmt.Errorf("draft %d not found", id)
 	}
+	s.serverDraftFlush.Delete(id)
+	s.draftGone(copies)
 	return os.RemoveAll(s.draftDir(id))
 }
 

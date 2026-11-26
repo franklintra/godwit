@@ -48,8 +48,9 @@ var (
 type wakeSource int
 
 const (
-	wakeOutbox wakeSource = iota // the next queued outbox item comes due
-	wakeOps                      // the next purge or archive undo window ends
+	wakeOutbox       wakeSource = iota // the next queued outbox item comes due
+	wakeOps                            // the next purge or archive undo window ends
+	wakeServerDrafts                   // a changed draft's server copy comes due (ADR 0045)
 	wakeSources
 )
 

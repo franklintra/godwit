@@ -232,8 +232,9 @@ func decodeCursor(c string) (date, id int64, err error) {
 
 // notPurgedCond is the condition on messages alias m that no permanent delete
 // of it waits (in its undo window or for the push): lists, searches and counts
-// leave those out at once, before the server expunges them.
-const notPurgedCond = "NOT " + mailsync.PurgeWaits
+// leave those out at once, before the server expunges them. They leave out a
+// draft's server copy too (notServerDraft): the draft itself shows instead.
+const notPurgedCond = "NOT " + mailsync.PurgeWaits + " AND " + notServerDraft
 
 // shownFolder is the one folder message alias m is reported in (ADR 0034) of
 // those it shows in: the inbox, else another (lowest id), else All Mail. A
