@@ -44,6 +44,37 @@ type Draft struct {
 	// ScheduledFor is the original send time of a scheduled message taken back
 	// from the outbox, or zero if none. SaveDraft ignores this field.
 	ScheduledFor time.Time
+	// Format is how the draft is sent and edited: FormatHTML or FormatPlain.
+	// A plain draft's editable part is stored one paragraph per line
+	// (mail.PlainHTML); it is sent as text/plain, format=flowed, its quote as
+	// "> " lines and its signature as text (mail.PlainBody). SaveDraft of a
+	// new draft with "" takes the account's default (DraftFormat); an update
+	// with "" keeps the stored format. Saving a draft as plain turns its
+	// editable part into text (mail.PlainText), formatting dropped; saving
+	// it as HTML keeps the lines as paragraphs.
+	Format string
+}
+
+// A draft's format (Draft.Format), and the default one for new drafts
+// (Account.ComposeFormat, Settings.ComposeFormat).
+const (
+	FormatHTML  = "html"  // multipart/alternative: the HTML and its text
+	FormatPlain = "plain" // one text/plain part, format=flowed (RFC 3676)
+)
+
+var draftFormats = map[string]bool{FormatHTML: true, FormatPlain: true}
+
+// DraftFormat is the format a new draft from acc starts in: the account's
+// own default, else the settings', else FormatHTML.
+func DraftFormat(acc Account, st Settings) string {
+	return cmp.Or(acc.ComposeFormat, st.ComposeFormat, FormatHTML)
+}
+
+// plainDraft is a draft body with its editable part as the text a plain
+// draft keeps (mail.PlainHTML of mail.PlainText); quote and signature stay.
+func plainDraft(body string) string {
+	ed, quote, sig := mail.SplitDraft(body)
+	return mail.JoinDraft(mail.PlainHTML(mail.PlainText(ed)), quote, sig)
 }
 
 // DraftAttachment is a file copied into the draft's directory.
@@ -158,15 +189,26 @@ func (s *Service) buildDraft(ctx context.Context, accountID int64, mode string, 
 			return Draft{}, ErrReceiveOnly
 		}
 	}
-	d := Draft{AccountID: acc.ID, Mode: mode}
 	st, err := s.loadSettings(ctx)
 	if err != nil {
 		return Draft{}, err
 	}
+	d := Draft{AccountID: acc.ID, Mode: mode, Format: DraftFormat(acc, st)}
 	if mode != "new" {
 		orig, err := s.sourceMessage(ctx, accountID, sourceMessageID)
 		if err != nil {
 			return Draft{}, err
+		}
+		if st.ReplyInKind && mode != "forward" { // a reply in the format of the mail it answers
+			d.Format = FormatHTML
+			if orig.HTML == "" {
+				d.Format = FormatPlain
+			}
+		}
+		if d.Format == FormatPlain && orig.Text != "" {
+			text := *orig // a plain reply quotes the mail's own text, not its HTML made text
+			text.HTML = ""
+			orig = &text
 		}
 		d.SourceMessageID = sourceMessageID
 		if mode == "forward" {
@@ -186,6 +228,9 @@ func (s *Service) buildDraft(ctx context.Context, accountID int64, mode string, 
 		return Draft{}, err
 	}
 	d.HTML = withSignature(d.HTML, acc, cids, st.SignatureDelimiter)
+	if d.Format == FormatPlain {
+		d.HTML = plainDraft(d.HTML)
+	}
 	return d, nil
 }
 
@@ -277,9 +322,11 @@ func (s *Service) copyAttachments(ctx context.Context, draftID, messageID int64)
 	return nil
 }
 
-// SaveDraft inserts d (ID 0) or updates its addresses, subject and body. The
-// HTML is sanitized for composing (no scripts, handlers or remote resources).
-// Attachments are changed with AddAttachment and RemoveAttachment.
+// SaveDraft inserts d (ID 0) or updates its addresses, subject, body and,
+// unless "", Format. The HTML is sanitized for composing (no scripts,
+// handlers or remote resources); a plain draft's editable part is kept as
+// text (Draft.Format). Attachments are changed with AddAttachment and
+// RemoveAttachment.
 func (s *Service) SaveDraft(ctx context.Context, d Draft) (Draft, error) {
 	if err := s.auditMCPDraft(ctx, "SaveDraft", d.ID); err != nil {
 		return Draft{}, err
@@ -332,6 +379,9 @@ func (s *Service) saveDraft(ctx context.Context, d Draft) (out Draft, err error)
 		return Draft{}, err
 	}
 	d.HTML = html
+	if d.Format != "" && !draftFormats[d.Format] {
+		return Draft{}, fmt.Errorf("unknown draft format %q", d.Format)
+	}
 	now := time.Now().Unix()
 	if d.ID == 0 {
 		if !draftModes[d.Mode] {
@@ -340,10 +390,18 @@ func (s *Service) saveDraft(ctx context.Context, d Draft) (out Draft, err error)
 		if local, err := s.localArchive(ctx, d.AccountID); local || err != nil {
 			return Draft{}, cmp.Or(err, ErrLocalArchive)
 		}
+		if d.Format == "" {
+			if d.Format, err = s.defaultFormat(ctx, d.AccountID); err != nil {
+				return Draft{}, err
+			}
+		}
+		if d.Format == FormatPlain {
+			d.HTML = plainDraft(d.HTML)
+		}
 		r, err := s.db.Execute(ctx, `INSERT INTO drafts(account_id, mode, source_message_id, to_addrs, cc_addrs, bcc_addrs,
-			reply_to, subject, body_html, updated_at, from_program) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			reply_to, subject, body_html, updated_at, from_program, format) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			d.AccountID, d.Mode, nullID(d.SourceMessageID), encodeList(d.To), encodeList(d.Cc), encodeList(d.Bcc),
-			d.ReplyTo, d.Subject, d.HTML, now, fromProgram(ctx))
+			d.ReplyTo, d.Subject, d.HTML, now, fromProgram(ctx), d.Format)
 		if err != nil {
 			return Draft{}, err
 		}
@@ -352,9 +410,23 @@ func (s *Service) saveDraft(ctx context.Context, d Draft) (out Draft, err error)
 	if err := s.checkWritable(ctx, d.ID); err != nil {
 		return Draft{}, err
 	}
+	format := d.Format
+	if format == "" { // kept: a plain draft's body still becomes text
+		rows, err := s.db.Query(ctx, "SELECT format FROM drafts WHERE id = ?", d.ID)
+		if err != nil {
+			return Draft{}, err
+		}
+		if len(rows.Values) > 0 {
+			format = store.Str(rows.Values[0][0])
+		}
+	}
+	if format == FormatPlain {
+		d.HTML = plainDraft(d.HTML)
+	}
 	q, args := `UPDATE drafts SET to_addrs = ?, cc_addrs = ?, bcc_addrs = ?, reply_to = ?, subject = ?,
-		body_html = ?, updated_at = ?, revision = revision + 1, from_program = MAX(from_program, ?) WHERE id = ?`,
-		[]any{encodeList(d.To), encodeList(d.Cc), encodeList(d.Bcc), d.ReplyTo, d.Subject, d.HTML, now, fromProgram(ctx), d.ID}
+		body_html = ?, updated_at = ?, revision = revision + 1, from_program = MAX(from_program, ?),
+		format = COALESCE(NULLIF(?, ''), format) WHERE id = ?`,
+		[]any{encodeList(d.To), encodeList(d.Cc), encodeList(d.Bcc), d.ReplyTo, d.Subject, d.HTML, now, fromProgram(ctx), d.Format, d.ID}
 	if d.Revision != 0 {
 		q, args = q+" AND revision = ?", append(args, d.Revision)
 	}
@@ -375,6 +447,19 @@ func (s *Service) saveDraft(ctx context.Context, d Draft) (out Draft, err error)
 		return Draft{}, fmt.Errorf("draft %d not found", d.ID)
 	}
 	return s.GetDraft(ctx, d.ID)
+}
+
+// defaultFormat is the format a new draft of the account starts in (DraftFormat).
+func (s *Service) defaultFormat(ctx context.Context, accountID int64) (string, error) {
+	acc, err := s.account(ctx, accountID)
+	if err != nil {
+		return "", err
+	}
+	st, err := s.loadSettings(ctx)
+	if err != nil {
+		return "", err
+	}
+	return DraftFormat(acc, st), nil
 }
 
 // ListDrafts returns the account's drafts, most recently saved first. Drafts
@@ -419,7 +504,7 @@ func (s *Service) DraftForApproval(ctx context.Context, approvalID int64) (int64
 // read, covering rows stored before SaveDraft sanitized.
 func (s *Service) GetDraft(ctx context.Context, id int64) (Draft, error) {
 	rows, err := s.db.Query(ctx, `SELECT account_id, mode, source_message_id, to_addrs, cc_addrs, bcc_addrs, reply_to,
-		subject, body_html, updated_at, revision, from_program, scheduled_for FROM drafts WHERE id = ?`, id)
+		subject, body_html, updated_at, revision, from_program, scheduled_for, format FROM drafts WHERE id = ?`, id)
 	if err != nil {
 		return Draft{}, err
 	}
@@ -430,7 +515,7 @@ func (s *Service) GetDraft(ctx context.Context, id int64) (Draft, error) {
 	d := Draft{ID: id, AccountID: store.Int(r[0]), Mode: store.Str(r[1]), SourceMessageID: store.Int(r[2]),
 		To: jsonList(store.Str(r[3])), Cc: jsonList(store.Str(r[4])), Bcc: jsonList(store.Str(r[5])),
 		ReplyTo: store.Str(r[6]), Subject: store.Str(r[7]), UpdatedAt: time.Unix(store.Int(r[9]), 0), Revision: store.Int(r[10]),
-		FromProgram: store.Int(r[11]) != 0, ScheduledFor: unixMilli(r[12])}
+		FromProgram: store.Int(r[11]) != 0, ScheduledFor: unixMilli(r[12]), Format: cmp.Or(store.Str(r[13]), FormatHTML)}
 	if d.HTML, err = s.sanitizeDraft(ctx, store.Str(r[8])); err != nil {
 		return Draft{}, err
 	}
@@ -785,7 +870,7 @@ func (s *Service) enqueue(ctx context.Context, draftID, rev int64, checked []str
 		return ErrReceiveOnly
 	}
 	o := mail.Outgoing{From: (&netmail.Address{Name: acc.Name, Address: acc.Email}).String(), ReplyTo: d.ReplyTo,
-		To: d.To, Cc: d.Cc, Bcc: d.Bcc, Subject: d.Subject, HTML: d.HTML, Related: related}
+		To: d.To, Cc: d.Cc, Bcc: d.Bcc, Subject: d.Subject, HTML: d.HTML, Related: related, Plain: d.Format == FormatPlain}
 	var stmts []sqlite.Statement
 	if rs != nil {
 		stmts = rs.stmts

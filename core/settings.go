@@ -87,6 +87,14 @@ type Settings struct {
 	// signature, which clients such as Mutt and Thunderbird recognize and
 	// fold; off by default.
 	SignatureDelimiter bool
+	// ComposeFormat is the format new drafts start in (Draft.Format):
+	// FormatHTML (the default; "" too) or FormatPlain. An account's own
+	// Account.ComposeFormat comes first.
+	ComposeFormat string
+	// ReplyInKind writes a reply in the format of the mail it answers: plain
+	// text to a mail with no HTML, HTML to one with HTML, whatever
+	// ComposeFormat says; off by default. Forwards keep the default.
+	ReplyInKind bool
 	// AutoLabel lets the classifier label new Inbox mail; on by default.
 	// A rescan runs either way.
 	AutoLabel bool
@@ -303,6 +311,8 @@ func (st Settings) validate(kept []mask.Rule) error {
 		return fmt.Errorf("invalid remote images mode %q", st.RemoteImages)
 	case !in(st.MCPSend, "", MCPSendOff, MCPSendConfirm, MCPSendDirect):
 		return fmt.Errorf("invalid MCP send level %q", st.MCPSend)
+	case !in(st.ComposeFormat, "", FormatHTML, FormatPlain):
+		return fmt.Errorf("invalid compose format %q", st.ComposeFormat)
 	case summaryRank(st.SummaryMode) < 0:
 		return fmt.Errorf("invalid summary level %q", st.SummaryMode)
 	case !in(st.ProxyMode, "", ProxySystem, ProxyCustom, ProxyOff):

@@ -902,6 +902,12 @@ var Migrations = [][]string{{
 	// before, which compare by set_at and archived_at.
 	`ALTER TABLE thread_deadlines ADD COLUMN set_version INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE archive_marks ADD COLUMN archived_version INTEGER NOT NULL DEFAULT 0`,
+}, {
+	// A draft's format: 'html' (multipart/alternative) or 'plain' (text/plain,
+	// format=flowed). An account's compose_format is what its new drafts
+	// start in: '' follows Settings.ComposeFormat.
+	`ALTER TABLE drafts ADD COLUMN format TEXT NOT NULL DEFAULT 'html'`,
+	`ALTER TABLE accounts ADD COLUMN compose_format TEXT NOT NULL DEFAULT ''`,
 }}
 
 // HistoryRowsVersion is the schema version that keeps a conversation's
