@@ -115,9 +115,15 @@ func slugify(s string) string {
 // interleaved so no op gets a cache another left; after each round it calls
 // between (a memory sample).
 func runHot(ctx context.Context, c *uiclient.Client, ops []hotOp, rounds int, prefix string, rep *report, between func()) error {
-	for _, op := range ops { // warm-up, and a check that each works
-		if err := op.Do(ctx, c); err != nil {
-			return fmt.Errorf("%s: %w", op.Name, err)
+	return runHotWith(ctx, c, ops, rounds, true, prefix, rep, between)
+}
+
+// runHotWith is runHot, with or without the warm-up round: the saved views
+// take seconds each, and the opening before them has warmed the cache.
+func runHotWith(ctx context.Context, c *uiclient.Client, ops []hotOp, rounds int, warmup bool, prefix string, rep *report, between func()) error {
+	for i := 0; warmup && i < len(ops); i++ { // warm-up, and a check that each works
+		if err := ops[i].Do(ctx, c); err != nil {
+			return fmt.Errorf("%s: %w", ops[i].Name, err)
 		}
 	}
 	for range rounds {

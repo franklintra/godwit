@@ -256,7 +256,7 @@ func measureSession(ctx context.Context, c runConfig, o *opener, meta fixtureMet
 	if c.want("hot") || c.want("mem") {
 		rounds := 0
 		// the saved views take seconds each on a big mailbox: fewer rounds
-		if err := runHot(ctx, hc, viewOps(meta), c.viewRounds, "hot", rep, nil); err != nil {
+		if err := runHotWith(ctx, hc, viewOps(meta), c.viewRounds, false, "hot", rep, nil); err != nil {
 			return fmt.Errorf("views: %w", err)
 		}
 		err := runHot(ctx, hc, hotOps(meta), c.hotRounds, "hot", rep, func() {
@@ -316,7 +316,7 @@ func measurePressured(ctx context.Context, c runConfig, o *opener, meta fixtureM
 	defer hc.Close()
 	ops := viewOps(meta)
 	ops = append(ops, hotOps(meta)[0]) // the unified inbox's first page
-	if err := runHot(ctx, hc, ops, c.pressRounds, "pressured.hot", rep, nil); err != nil {
+	if err := runHotWith(ctx, hc, ops, c.pressRounds, false, "pressured.hot", rep, nil); err != nil {
 		return err
 	}
 	st := o.group.stat()
