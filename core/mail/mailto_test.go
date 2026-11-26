@@ -28,6 +28,27 @@ func TestParseMailto(t *testing.T) {
 	}
 }
 
+// A mailto: link's X- fields (and Keywords, Comments) become the draft's
+// header fields; tracking parameters, Godwit's own fields and anything
+// CheckHeader refuses are dropped.
+func TestParseMailtoHeaders(t *testing.T) {
+	m, err := mail.ParseMailto("mailto:a@x.com?subject=Hi&X-Hermes-Session=abc%20123&utm_source=news&x=1" +
+		"&keywords=q3&From=eve@x.com&X-Godwit-Rule=1&Content-Type=text%2Fhtml&Reply-To=eve@x.com" +
+		"&X-Evil=a%0D%0ABcc:%20eve@x.com&x-note=caf%C3%A9&X-Empty=&In-Reply-To=%3Cm@x%3E")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"a@x.com"}, m.To)
+	assert.Empty(t, m.Bcc)
+	assert.Equal(t, []mail.Header{{"X-Hermes-Session", "abc 123"}, {"Keywords", "q3"}, {"X-Note", "café"}}, m.Headers)
+
+	long := "mailto:a@x.com?"
+	for range mail.MaxHeaders + 5 {
+		long += "X-N=1&"
+	}
+	m, err = mail.ParseMailto(long)
+	require.NoError(t, err)
+	assert.Len(t, m.Headers, mail.MaxHeaders)
+}
+
 func TestParseListHeaders(t *testing.T) {
 	p, err := mail.Parse([]byte("List-Unsubscribe: <mailto:u@x.com>,\r\n <https://x.com/u>\r\nList-Unsubscribe-Post:  List-Unsubscribe=One-Click \r\n" +
 		"List-Id: News <news.x.com>\r\n\r\nbody\r\n"))
