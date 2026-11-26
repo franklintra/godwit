@@ -902,6 +902,36 @@ var Migrations = [][]string{{
 	// before, which compare by set_at and archived_at.
 	`ALTER TABLE thread_deadlines ADD COLUMN set_version INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE archive_marks ADD COLUMN archived_version INTEGER NOT NULL DEFAULT 0`,
+}, {
+	// Server drafts (ADR 0045): 1 keeps the account's drafts in its Drafts
+	// folder as well as here.
+	`ALTER TABLE accounts ADD COLUMN server_drafts INTEGER NOT NULL DEFAULT 0`,
+	// One row per copy of a draft in a Drafts folder that Godwit stored or
+	// took over. draft_id NULL: its draft was sent or deleted, so the copy
+	// goes. token is the draft's X-Godwit-Draft-ID, message_id_hdr the copy's
+	// own Message-ID ('' if it has none) and message_id the local message of a
+	// copy taken over from another app; either hides the copy from the mail
+	// lists. state: appending (the APPEND may have gone through), stored,
+	// failed (refused; tried again at the next revision), gone (another app
+	// removed it; pushed again at the next revision) or removed (Godwit
+	// deleted it; the row goes once the sync drops the local message). seen:
+	// a sync stored the copy here once, so its absence means another app
+	// removed it.
+	`CREATE TABLE server_drafts (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+		draft_id INTEGER REFERENCES drafts(id) ON DELETE SET NULL,
+		token TEXT NOT NULL,
+		message_id_hdr TEXT NOT NULL DEFAULT '',
+		message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+		revision INTEGER NOT NULL,
+		folder TEXT NOT NULL,
+		server_ref TEXT,
+		state TEXT NOT NULL,
+		seen INTEGER NOT NULL DEFAULT 0,
+		created_at INTEGER NOT NULL)`,
+	`CREATE INDEX server_drafts_draft ON server_drafts(draft_id)`,
+	`CREATE INDEX server_drafts_account ON server_drafts(account_id, message_id_hdr)`,
 }}
 
 // HistoryRowsVersion is the schema version that keeps a conversation's

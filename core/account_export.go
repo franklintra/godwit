@@ -31,6 +31,7 @@ type ExportedAccount struct {
 	Sending        ExportedServer     `json:"sending"`
 	Sync           ExportedSyncRange  `json:"sync"`
 	LabelKeywords  bool               `json:"label_keywords,omitempty"`
+	ServerDrafts   bool               `json:"server_drafts,omitempty"`
 	AIInstructions string             `json:"ai_instructions,omitempty"`
 	Signature      *ExportedSignature `json:"signature,omitempty"`
 }
@@ -128,6 +129,7 @@ func (s *Service) ExportAccounts(ctx context.Context) ([]byte, error) {
 			Sending:        exportedServer(acc.Sending),
 			Sync:           ExportedSyncRange{Limit: acc.Sync.Limit, Months: acc.Sync.Months},
 			LabelKeywords:  acc.LabelKeywords,
+			ServerDrafts:   acc.ServerDrafts,
 			AIInstructions: acc.AIInstructions,
 			Signature:      expSig,
 		})
