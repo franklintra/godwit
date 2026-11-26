@@ -129,6 +129,8 @@ MoveToRole
 NewConversation
 NewDraft
 NewMailtoDraft
+OpenDraft
+OpenMessage
 PendingLabels
 PendingMCPSends
 PendingOps

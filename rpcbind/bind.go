@@ -125,6 +125,7 @@ var table = []Error{
 	{Code: "mcp_send_composing", Err: core.ErrMCPSendComposing},
 	{Code: "mcp_send_busy", Err: core.ErrMCPSendBusy},
 	{Code: "no_ui", Err: core.ErrNoUI},
+	{Code: "no_window", Err: core.ErrNoWindow},
 	{Code: "no_outbox_draft", Err: core.ErrNoOutboxDraft},
 	{Code: "no_unsubscribe", Err: core.ErrNoUnsubscribe},
 	{Code: "unsubscribe_web", Err: core.ErrUnsubscribeWeb},

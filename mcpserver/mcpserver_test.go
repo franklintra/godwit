@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -84,7 +85,7 @@ func cacheFiles(dataDir string) int {
 }
 
 var allTools = []string{"create_draft", "find_message_by_message_id", "get_draft", "get_message", "get_thread", "list_accounts", "list_drafts",
-	"list_folders", "list_threads", "list_view_threads", "list_views", "search", "search_contacts", "send_draft", "set_reply_deadline", "show_draft", "show_mail", "update_draft"}
+	"list_folders", "list_threads", "list_view_threads", "list_views", "open_draft", "open_message", "search", "search_contacts", "send_draft", "set_reply_deadline", "show_draft", "show_mail", "update_draft"}
 
 func TestMCPListTools(t *testing.T) {
 	e := coretest.New(t, coretest.WithoutAutoSync())
@@ -104,7 +105,7 @@ func TestMCPListTools(t *testing.T) {
 	}
 	assert.Equal(t, map[string]bool{"list_accounts": true, "list_folders": true, "list_threads": true, "get_thread": true,
 		"get_message": true, "list_views": true, "list_view_threads": true, "search": true, "search_contacts": true, "list_drafts": true, "get_draft": true, "show_draft": true, "show_mail": true,
-		"find_message_by_message_id": true, "create_draft": false, "update_draft": false, "send_draft": false, "set_reply_deadline": false}, readOnly)
+		"find_message_by_message_id": true, "open_draft": false, "open_message": false, "create_draft": false, "update_draft": false, "send_draft": false, "set_reply_deadline": false}, readOnly)
 	assert.Contains(t, cs.InitializeResult().Instructions, "untrusted_email")
 	assert.NotContains(t, cs.InitializeResult().Instructions, "cannot send")
 	assert.Contains(t, cs.InitializeResult().Instructions, "Send through MCP")
@@ -749,4 +750,61 @@ func TestMCPMessageIDLookupAndReply(t *testing.T) {
 	ds, err = e.Svc.ListDrafts(ctx, alice.ID)
 	require.NoError(t, err)
 	assert.Len(t, ds, 1, "a failed reply leaves no draft")
+}
+
+// open_draft, open_message and create_draft's open ask Godwit to show the
+// draft or message (core.Options.ShowUI); with no window to show, open_draft
+// fails and create_draft keeps the draft and says it was not opened.
+func TestMCPOpenDraftAndMessage(t *testing.T) {
+	var mu sync.Mutex
+	var shown []string
+	e := coretest.New(t, coretest.WithoutAutoSync(), coretest.WithShowUI(func(what string) error {
+		mu.Lock()
+		defer mu.Unlock()
+		shown = append(shown, what)
+		return nil
+	}))
+	acc := e.AddAccount(t, "alice@example.com")
+	e.Deliver(t, acc.ID, "INBOX", coretest.Msg("bob@example.com", "alice@example.com", "Lunch", "Lunch on Tuesday?"))
+	page, err := e.Svc.ListMessages(t.Context(), core.View{Unified: "inbox"}, "", 0)
+	require.NoError(t, err)
+	cs, _ := bridge(t, e)
+
+	got := ok(t, cs, "create_draft", map[string]any{"to": []string{"dave@example.com"}, "subject": "s", "body": "b", "open": true})
+	assert.Contains(t, got, "opened in a Godwit compose window")
+	ds, err := e.Svc.ListDrafts(t.Context(), acc.ID)
+	require.NoError(t, err)
+	require.Len(t, ds, 1)
+	ok(t, cs, "open_draft", map[string]any{"draft_id": ds[0].ID})
+	ok(t, cs, "open_message", map[string]any{"message_id": page.Items[0].ID})
+	mu.Lock()
+	assert.Equal(t, []string{fmt.Sprint("draft:", ds[0].ID), fmt.Sprint("draft:", ds[0].ID), fmt.Sprint("message:", page.Items[0].ID)}, shown)
+	mu.Unlock()
+	for _, c := range []struct {
+		tool string
+		args map[string]any
+	}{
+		{"open_draft", map[string]any{"draft_id": 999999}},
+		{"open_message", map[string]any{"message_id": 999999}},
+	} {
+		text, isErr := call(t, cs, c.tool, c.args)
+		assert.True(t, isErr, "%s: %s", c.tool, text)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Len(t, shown, 3, "nothing shown for what does not exist")
+}
+
+func TestMCPOpenWithoutWindow(t *testing.T) {
+	e := coretest.New(t, coretest.WithoutAutoSync())
+	acc := e.AddAccount(t, "alice@example.com")
+	cs, _ := bridge(t, e)
+	got := ok(t, cs, "create_draft", map[string]any{"to": []string{"dave@example.com"}, "subject": "s", "body": "b", "open": true})
+	assert.Contains(t, got, "not opened in Godwit: "+core.ErrNoWindow.Error())
+	ds, err := e.Svc.ListDrafts(t.Context(), acc.ID)
+	require.NoError(t, err)
+	require.Len(t, ds, 1, "saved all the same")
+	text, isErr := call(t, cs, "open_draft", map[string]any{"draft_id": ds[0].ID})
+	assert.True(t, isErr)
+	assert.Equal(t, core.ErrNoWindow.Error(), text)
 }

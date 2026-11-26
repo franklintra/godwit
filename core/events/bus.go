@@ -32,7 +32,10 @@ const (
 	QuitRequested = "quit.requested"
 	// OpenRequested and ComposeRequested: Open or Compose was chosen in the
 	// backend's tray while a ui client is connected; the interface shows its
-	// main window, or a new compose window.
+	// main window, or a new compose window. An OpenRequested with Open set
+	// asks for that instead, as `godwit --open` does: a draft or message a
+	// program asked to show (core.OpenTarget), or a godwit: or mailto: URL
+	// the system handed the backend.
 	OpenRequested    = "open.requested"
 	ComposeRequested = "compose.requested"
 	// SignInCodePreview: a development build's interface asked to preview
@@ -68,6 +71,9 @@ type Event struct {
 	Done, Total int
 	// Notification is set on notification.clicked: the clicked notification's ID.
 	Notification string
+	// Open is set on an open.requested for something other than the main
+	// window: what `godwit --open` would open.
+	Open string
 }
 
 // Bus fans events out to subscribers. Publish never blocks.
