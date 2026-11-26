@@ -682,6 +682,10 @@ test("switches the body to plain text and back, saving first", async () => {
     body,
     fromProgram: false,
     format,
+    openpgp: state.openpgp,
+    identity: 0,
+    headers: [],
+    readReceipt: false,
   });
   vi.mocked(api.setFormat)
     .mockResolvedValueOnce(change("plain", "<p>正文!</p><p>  第二段</p>", 9))
