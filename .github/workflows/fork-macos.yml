@@ -44,6 +44,12 @@ jobs:
           app=$(find dist -maxdepth 3 -name 'Godwit.app' -type d | head -1)
           test -n "$app" || { find dist -maxdepth 3; echo "no Godwit.app in dist" >&2; exit 1; }
           codesign -dv "$app" 2>&1 | sed -n '1,8p'
+          # godwit: and mailto: links must reach the app (ADR 0049).
+          types=$(plutil -extract CFBundleURLTypes json -o - "$app/Contents/Info.plist")
+          echo "CFBundleURLTypes: $types"
+          for scheme in godwit mailto; do
+            grep -q "\"$scheme\"" <<<"$types" || { echo "Info.plist does not claim $scheme:" >&2; exit 1; }
+          done
           go version -m "$app/Contents/MacOS/"* 2>/dev/null | grep -E 'vcs\.(revision|modified)' || true
           ditto -c -k --keepParent "$app" "$RUNNER_TEMP/Godwit-macOS-arm64.zip"
           echo "zip=$RUNNER_TEMP/Godwit-macOS-arm64.zip" >> "$GITHUB_OUTPUT"
