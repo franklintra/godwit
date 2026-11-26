@@ -6,8 +6,9 @@ branches, merged for one local build. Upstream PRs come from the feature branche
 ## Branches
 
 - Base: upstream v1.40.2 (`a6040c1`), the fork's `main`.
-- Merged: `feat/headers`, `feat/privacy`, `feat/server-drafts`.
-- Still to merge: `feat/automation`, `feat/identities`, `feat/plaintext`, `feat/openpgp`.
+- Merged, in this order: `feat/headers`, `feat/privacy`, `feat/server-drafts`, `feat/identities`,
+  `feat/automation`, `feat/openpgp`.
+- Still to merge: `feat/plaintext`.
 
 Each feature branch stays based on upstream, so it can become an upstream PR on its own. To add one:
 
@@ -17,8 +18,9 @@ Each feature branch stays based on upstream, so it can become an upstream PR on 
    even when git merges `schema.go` without a conflict. `TestMigrationsAreUpstreams` fails until it is done.
    The branch's own migration test then uses `store.ForkMigrations` instead of cutting `store.Migrations`
    (see `core/store/draft_headers_migration_test.go`).
-3. Renumber its ADR if the number is taken (the fork uses 0045 headers, 0046 network privacy, 0047 server
-   drafts), and fix the references (`git grep 'ADR 00xx'`).
+3. Renumber its ADR if the number is taken, and fix the references (`git grep 'ADR 00xx'`). The fork
+   uses 0045 headers, 0046 network privacy, 0047 server drafts, 0048 identities, 0049 open from outside
+   (automation) and 0050 OpenPGP.
 4. Regenerate `uiclient/client_gen.go` (`go generate ./uiclient`) and `mcpserver/views/draft.html`
    (`cd web && bun run views`) if the merge changed their inputs, then run the checks in "Checks".
 
@@ -87,7 +89,7 @@ go tool mygo generate && go generate ./uiclient
 test -z "$(gofmt -l $(git ls-files '*.go'))"
 go tool mygo i18n check
 go build ./... && go vet ./core/... ./rpcbind/... ./mcpserver/... ./webui/... ./app/...
-go test ./core/store ./core/mail ./rpcbind ./mcpserver ./webui
-go test ./core -run 'Draft|Header|Server|Network|Setting|Catalog|Registry|Avatar|BIMI|Migration'
+go test ./core/store ./core/mail ./rpcbind ./mcpserver ./webui ./uiclient ./internal/gpg/... ./backend/jmap ./cmd/godwit
+go test ./core -run 'Draft|Header|Server|Network|Setting|Catalog|Registry|Avatar|BIMI|Migration|Identit|OpenPGP|Open|MessageID|Mailto|Send'
 cd web && bun run typecheck && bunx vitest run src/compose src/mcp
 ```
