@@ -747,7 +747,11 @@ func (r *reader) replyName(m core.MessageSummary) string {
 	if body := r.bodies[m.ID]; body != nil && body.ready {
 		orig.ReplyTo = body.msg.ReplyTo
 	}
-	if to, _ := gomail.ReplyRecipients(orig, r.accountOf(m), false); len(to) > 0 {
+	var more []string // the account's identities are the user's too
+	if f, ok := r.p.folder(m.FolderID); ok {
+		more = r.p.a.identityAddresses(f.AccountID)
+	}
+	if to, _ := gomail.ReplyRecipients(orig, r.accountOf(m), false, more...); len(to) > 0 {
 		name, _ := sender(to[0])
 		return name
 	}

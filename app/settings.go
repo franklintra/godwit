@@ -47,7 +47,7 @@ type settingsPage struct {
 	forms         map[int64]*accountForm
 	usage         map[int64]int64    // attachment cache bytes per account; absent until read
 	boxes         map[int64]*mailbox // 邮箱行为 per account; absent until read
-	dialog        string             // the open dialog: "password", "client", "servers", "remove", "cache"; "" none
+	dialog        string             // the open dialog: "password", "client", "servers", "remove", "cache", "identity", "identity_remove"; "" none
 	dlgAcc        int64              // the account the dialog is about
 	dlgGen        uint64             // bumped per dialog opened; an older dialog's result leaves it alone
 	open          bool               // the dialog shows; Escape or a click outside clears it
@@ -60,6 +60,7 @@ type settingsPage struct {
 	iconUpload    []byte                                                                         // the icon dialog's uploaded image, over iconSelected
 	iconPreview   ui.ImageSource                                                                 // iconUpload decoded
 	servers       serverForm                                                                     // the servers dialog's fields
+	identity      identityForm                                                                   // the identity dialogs' fields (ADR 0045)
 	reauth        map[int64]bool                                                                 // a browser sign-in runs for the account
 	rechecking    map[int64]bool                                                                 // a receive-only account's sending check runs
 	exporting     bool                                                                           // ExportAccounts runs
