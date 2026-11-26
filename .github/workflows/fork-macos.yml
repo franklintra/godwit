@@ -16,6 +16,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Shows whether hosted runners start at all when the macOS jobs wait.
+  probe:
+    if: github.repository != 'godwit-email/godwit'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "hosted runners start"
   app:
     if: github.repository != 'godwit-email/godwit'
     # Two images: hosted macOS arm64 runners are often short, so the first
