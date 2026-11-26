@@ -25,6 +25,8 @@ type Outgoing struct {
 	// signature images): sent inline, in multipart/related, when it does.
 	Related []Attachment
 	Header  map[string]string // more header fields, such as RuleHeader
+	// OpenPGP, when set, signs or encrypts the message with PGP/MIME.
+	OpenPGP *OpenPGP
 }
 
 // RuleHeader marks mail a Godwit rule forwarded; mail carrying it is never
@@ -179,6 +181,13 @@ func Build(o Outgoing, now time.Time) (raw []byte, messageID string, err error) 
 	}
 	if err := body(w); err != nil {
 		return nil, "", err
+	}
+	if o.OpenPGP != nil {
+		sealed, err := sealOpenPGP(buf.Bytes(), o.OpenPGP)
+		if err != nil {
+			return nil, "", err
+		}
+		return sealed, messageID, nil
 	}
 	return buf.Bytes(), messageID, nil
 }
