@@ -598,6 +598,42 @@ func TestMCPDraftHeaders(t *testing.T) {
 	assert.Empty(t, d.Headers)
 }
 
+// bcc, reply_to and request_read_receipt are the draft's own fields, set
+// and changed by create_draft and update_draft and listed by get_draft.
+func TestMCPDraftBccReplyToReadReceipt(t *testing.T) {
+	e := coretest.New(t, coretest.WithoutAutoSync())
+	ctx := t.Context()
+	acc := e.AddAccount(t, "alice@example.com")
+	cs, _ := bridge(t, e)
+	got := ok(t, cs, "create_draft", map[string]any{"account_id": acc.ID, "to": []string{"bob@example.com"}, "subject": "Plans", "body": "Hi",
+		"bcc": []string{"dave@example.com"}, "reply_to": "team@example.com", "request_read_receipt": true})
+	assert.Contains(t, got, `field="bcc">dave@example.com</untrusted_email>`)
+	assert.Contains(t, got, `field="reply_to">team@example.com</untrusted_email>`)
+	assert.Contains(t, got, "\nread receipt requested, to the sending account's address\n")
+	ds, err := e.Svc.ListDrafts(ctx, acc.ID)
+	require.NoError(t, err)
+	d := ds[0]
+	assert.Equal(t, []string{"dave@example.com"}, d.Bcc)
+	assert.Equal(t, "team@example.com", d.ReplyTo)
+	assert.True(t, d.ReadReceipt)
+
+	ok(t, cs, "update_draft", map[string]any{"draft_id": d.ID, "revision": d.Revision, "subject": "Plans, again"})
+	d, err = e.Svc.GetDraft(ctx, d.ID)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"dave@example.com"}, d.Bcc, "left out: kept")
+	assert.Equal(t, "team@example.com", d.ReplyTo)
+	assert.True(t, d.ReadReceipt)
+	ok(t, cs, "update_draft", map[string]any{"draft_id": d.ID, "revision": d.Revision, "bcc": []string{}, "reply_to": "", "request_read_receipt": false})
+	d, err = e.Svc.GetDraft(ctx, d.ID)
+	require.NoError(t, err)
+	assert.Empty(t, d.Bcc)
+	assert.Empty(t, d.ReplyTo)
+	assert.False(t, d.ReadReceipt)
+	text, isErr := call(t, cs, "update_draft", map[string]any{"draft_id": d.ID, "revision": d.Revision, "request_read_receipt": "yes"})
+	assert.True(t, isErr)
+	assert.Equal(t, "invalid argument: request_read_receipt (expected boolean)", text)
+}
+
 func TestMCPUpdateDraftStale(t *testing.T) {
 	e := coretest.New(t, coretest.WithoutAutoSync())
 	ctx := t.Context()

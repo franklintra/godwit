@@ -6,6 +6,7 @@ const headers = [
   ["to", "To"],
   ["cc", "Cc"],
   ["bcc", "Bcc"],
+  ["reply_to", "Reply-To"],
   ["subject", "Subject"],
 ] as const;
 
@@ -89,6 +90,8 @@ export function render(root: HTMLElement, r: Result, accounts = "", actions?: Ac
     const v = field ? value(field) : from;
     if (v) head.append(el("dt", "", label), el("dd", "", v));
   }
+  if (lines.some((l) => l.startsWith("read receipt requested")))
+    head.append(el("dt", "", "Read receipt"), el("dd", "", "Requested, to your own address"));
   // The draft's own header fields ("Name: value"): sending carries them too.
   for (const f of fields.filter((f) => f.field === "header")) {
     const at = f.value.indexOf(": ");

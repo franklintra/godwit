@@ -3,8 +3,11 @@ import { render, withAccounts } from "./draft";
 
 // show_draft's text, as godwit mcp writes it (mcpserver/tools.go).
 const shown = `draft 7 · account 2 · reply to message 40 · revision 3 · saved 2026-10-24T09:00:00Z
+read receipt requested, to the sending account's address
 <untrusted_email id="draft-7" field="to">Bob &lt;bob@example.com&gt;</untrusted_email>
 <untrusted_email id="draft-7" field="cc">carol@example.com</untrusted_email>
+<untrusted_email id="draft-7" field="bcc">dave@example.com</untrusted_email>
+<untrusted_email id="draft-7" field="reply_to">team@example.com</untrusted_email>
 <untrusted_email id="draft-7" field="subject">Re: &lt;b&gt;Plans&lt;/b&gt;</untrusted_email>
 <untrusted_email id="draft-7" field="header">X-Tracking-Id: run 42</untrusted_email>
 <untrusted_email id="draft-7" field="body">Hi Bob,
@@ -33,6 +36,9 @@ test("a draft renders its account, recipients, subject and body as text", () => 
   expect(root.querySelector("img, a, b, script")).toBeNull();
   const dts = [...root.querySelectorAll("dt")].map((d) => d.textContent);
   expect(dts).toContain("X-Tracking-Id");
+  expect(dts).toEqual(expect.arrayContaining(["Bcc", "Reply-To", "Read receipt"]));
+  expect(text).toContain("dave@example.com");
+  expect(text).toContain("team@example.com");
   expect(text).toContain("run 42");
 });
 
