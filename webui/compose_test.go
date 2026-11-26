@@ -151,6 +151,29 @@ func TestComposeSaveThenLoad(t *testing.T) {
 	assert.Equal(t, "r@example.com", stored.ReplyTo)
 }
 
+// The page shows a program's header fields and read receipt read-only and
+// saves without them; its saves, before Load or after, keep both.
+func TestComposeSaveKeepsHeadersAndReadReceipt(t *testing.T) {
+	f := newFixture(t)
+	d := f.draft(t, "new", 0)
+	d.Headers, d.ReadReceipt = []mail.Header{{Name: "X-Hermes-Session", Value: "abc"}}, true
+	d, err := f.e.Svc.SaveDraft(t.Context(), d)
+	require.NoError(t, err)
+	f.c.Attach(1, d.ID)
+	res, err := f.page.Save(f.ctx(1), ComposeEdit{Body: "<p>before load</p>", Revision: d.Revision})
+	require.NoError(t, err)
+	st, err := f.page.Load(f.ctx(1))
+	require.NoError(t, err)
+	assert.Equal(t, []Header{{Name: "X-Hermes-Session", Value: "abc"}}, st.Headers)
+	assert.True(t, st.ReadReceipt)
+	_, err = f.page.Save(f.ctx(1), ComposeEdit{Body: "<p>after load</p>", Revision: res.Revision})
+	require.NoError(t, err)
+	stored, err := f.e.Svc.GetDraft(t.Context(), d.ID)
+	require.NoError(t, err)
+	assert.Equal(t, d.Headers, stored.Headers)
+	assert.True(t, stored.ReadReceipt)
+}
+
 func TestComposeConsecutiveSaves(t *testing.T) {
 	f := newFixture(t)
 	d := f.draft(t, "new", 0)

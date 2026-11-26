@@ -60,6 +60,7 @@ export const compose = (mode: "light" | "dark", withBody: boolean): ComposeState
   signatureHtml: "",
   attachments: [],
   headers: [],
+  readReceipt: false,
   revision: 1,
   theme: theme(mode),
   updatedAt: new Date().setHours(9, 52, 0, 0),

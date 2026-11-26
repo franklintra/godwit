@@ -94,6 +94,8 @@
   "compose_reply_to_input": "Indirizzo di risposta",
   "compose_headers": "Intestazioni aggiuntive ({arg1})",
   "compose_headers_help": "Inviate con il messaggio. Di solito le aggiunge un programma per riconoscere le risposte in seguito.",
+  "compose_read_receipt": "Conferma di lettura",
+  "compose_read_receipt_on": "Richiesta, inviata al tuo indirizzo",
   "compose_recipients_changed": "I destinatari sono stati modificati altrove. L’indirizzo che stai digitando non è ancora stato aggiunto: controlla i destinatari prima di inviare.",
   "compose_send": "Invia",
   "mail_scheduled": "Programmati",

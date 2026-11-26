@@ -94,6 +94,8 @@
   "compose_reply_to_input": "Endereço de resposta",
   "compose_headers": "Cabeçalhos adicionais ({arg1})",
   "compose_headers_help": "São enviados com a mensagem. Normalmente um programa os adiciona para reconhecer as respostas depois.",
+  "compose_read_receipt": "Confirmação de leitura",
+  "compose_read_receipt_on": "Pedida, enviada para o seu endereço",
   "compose_recipients_changed": "Os destinatários foram alterados noutro lugar. O endereço que está a escrever ainda não foi adicionado: verifique os destinatários antes de enviar.",
   "compose_send": "Enviar",
   "mail_scheduled": "Agendados",

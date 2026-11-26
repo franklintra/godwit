@@ -94,6 +94,8 @@
   "compose_reply_to_input": "填写回复地址",
   "compose_headers": "附加邮件头（{arg1}）",
   "compose_headers_help": "随邮件一起发出。通常由程序添加，用来对应之后的回复。",
+  "compose_read_receipt": "已读回执",
+  "compose_read_receipt_on": "已请求，回执发回你的地址",
   "compose_recipients_changed": "收件人已在别处被修改。你正在输入的地址还没有加入，发送前请核对收件人。",
   "compose_send": "发送",
   "mail_scheduled": "定时邮件",

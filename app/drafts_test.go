@@ -8,6 +8,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 	"github.com/godwit-email/godwit/core"
+	"github.com/godwit-email/godwit/core/mail"
 	"github.com/godwit-email/godwit/internal/i18n"
 )
 
@@ -230,6 +231,33 @@ func (h *harness) draftQueued(id int64) {
 		items, err := h.env.Svc.ListOutbox(context.Background(), d.AccountID)
 		return err == nil && slices.ContainsFunc(items, func(it core.OutboxItem) bool { return it.DraftID == id })
 	})
+}
+
+// The pane shows where approving sends the draft and what it carries:
+// Bcc, Reply-To, the read receipt and the draft's own header fields.
+func TestDraftPaneShowsBccReplyToAndExtras(t *testing.T) {
+	h, accs := mailHarness(t, nil, "alice@example.com")
+	if err := h.env.IMAP(accs[0].ID).User.Create("Drafts", nil); err != nil {
+		t.Fatal(err)
+	}
+	h.syncNow(accs[0])
+	ctx := context.Background()
+	d, err := h.env.Svc.NewDraft(ctx, accs[0].ID, "new", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Subject, d.To, d.HTML = "Tagged", []string{"bob@example.com"}, "<p>tagged body</p>"
+	d.Bcc, d.ReplyTo, d.ReadReceipt = []string{"dave@example.com"}, "team@example.com", true
+	d.Headers = []mail.Header{{Name: "X-Hermes-Session", Value: "abc"}}
+	if _, err = h.env.Svc.SaveDraft(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	h.waitMail("the drafts folder", func() bool { return h.tt.HasText("草稿") })
+	h.click("草稿")
+	h.click("Tagged")
+	for _, s := range []string{"密送", "dave@example.com", "回复地址", "team@example.com", "已读回执", "X-Hermes-Session", "abc"} {
+		h.see(s)
+	}
 }
 
 func TestDraftPaneSend(t *testing.T) {

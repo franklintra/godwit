@@ -14,11 +14,18 @@ import (
 	"github.com/godwit-email/godwit/core"
 	"github.com/godwit-email/godwit/core/coretest"
 	"github.com/godwit-email/godwit/core/events"
+	"github.com/godwit-email/godwit/core/mail"
 )
 
 // mcpSendHarness has an account and a draft to bob, with plan.pdf attached,
 // that godwit mcp asked to send under 每次确认.
 func mcpSendHarness(t *testing.T) (*harness, core.Account) {
+	t.Helper()
+	return mcpSendHarnessWith(t, nil)
+}
+
+// mcpSendHarnessWith is mcpSendHarness with more set on the draft by set.
+func mcpSendHarnessWith(t *testing.T, set func(*core.Draft)) (*harness, core.Account) {
 	t.Helper()
 	var acc core.Account
 	h := newHarnessWith(t, []coretest.Option{coretest.WithoutAutoSync()},
@@ -31,6 +38,9 @@ func mcpSendHarness(t *testing.T) (*harness, core.Account) {
 		t.Fatal(err)
 	}
 	d.To, d.Subject, d.HTML = []string{"bob@example.com"}, "Quarterly plan", "<p>the plan body</p>"
+	if set != nil {
+		set(&d)
+	}
 	if d, err = h.env.Svc.SaveDraft(ctx, d); err != nil {
 		t.Fatal(err)
 	}
@@ -57,6 +67,24 @@ func (h *harness) outbox(acc core.Account) int {
 		h.t.Fatal(err)
 	}
 	return len(out)
+}
+
+// Every address the message goes to or sends replies to is in front of the
+// user: Bcc (first-time marked), Reply-To, the read receipt and the draft's
+// own header fields.
+func TestMCPSendConfirmShowsBccReplyToAndExtras(t *testing.T) {
+	h, _ := mcpSendHarnessWith(t, func(d *core.Draft) {
+		d.Bcc, d.ReplyTo, d.ReadReceipt = []string{"dave@example.com"}, "team@example.com", true
+		d.Headers = []mail.Header{{Name: "X-Hermes-Session", Value: "abc"}}
+	})
+	h.see("发送这封邮件？")
+	h.see("密送")
+	h.see("dave@example.com")
+	h.see("回复地址")
+	h.see("team@example.com")
+	h.see("已读回执")
+	h.see("X-Hermes-Session")
+	h.see("abc")
 }
 
 // A request shows the account, the recipients (bob marked first-time), the

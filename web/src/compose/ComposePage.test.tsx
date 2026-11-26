@@ -93,6 +93,7 @@ const state = {
   signatureHtml: "<p>-- me</p>",
   attachments: [],
   headers: [],
+  readReceipt: false,
   revision: 7,
   updatedAt: new Date(2026, 9, 10, 9, 5).getTime(),
   scheduledFor: 0,
@@ -622,6 +623,15 @@ test("a draft without header fields shows no headers row", async () => {
   render(<ComposePage />);
   await body();
   expect(screen.queryByRole("button", { name: /附加邮件头/ })).not.toBeInTheDocument();
+  expect(screen.queryByText("已读回执")).not.toBeInTheDocument();
+});
+
+test("a read receipt request shows read-only", async () => {
+  vi.mocked(api.load).mockResolvedValue({ ...state, readReceipt: true });
+  render(<ComposePage />);
+  await body();
+  expect(screen.getByText("已读回执")).toBeInTheDocument();
+  expect(screen.getByText("已请求，回执发回你的地址")).toBeInTheDocument();
 });
 
 test("account switch keeps body", async () => {

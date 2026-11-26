@@ -47,6 +47,9 @@ type ComposeState struct {
 	// Headers are the draft's own header fields, shown read-only: the page
 	// saves without them, and core keeps them.
 	Headers []Header `json:"headers"`
+	// ReadReceipt: the message asks for a read receipt to the sending
+	// account's address; shown read-only, and saves keep it.
+	ReadReceipt bool `json:"readReceipt"`
 	// Revision is what the next save must pass; Theme styles the page.
 	Revision int64 `json:"revision"`
 	Theme    Theme `json:"theme"`

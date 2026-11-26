@@ -303,6 +303,7 @@ function Compose({
   const [showQuote, setShowQuote] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>(state.attachments);
   const [headers, setHeaders] = useState(state.headers); // read-only: saves leave them to core
+  const [readReceipt, setReadReceipt] = useState(state.readReceipt); // read-only, as headers
   const [tooLarge, setTooLarge] = useState<string[]>([]);
   const [failed, setFailed] = useState<string[]>([]);
   // at: the Send later time (unix ms) the warnings were for; 0 for a send of now.
@@ -422,6 +423,7 @@ function Compose({
       setQuote(l.quote);
       setAttachments(l.attachments);
       setHeaders(l.headers);
+      setReadReceipt(l.readReceipt);
       setSavedAt(fmt(new Date(l.updatedAt)));
     });
     editorRef.current?.setValue(l.body);
@@ -769,6 +771,7 @@ function Compose({
         setQuote(l.quote);
         setAttachments(l.attachments);
         setHeaders(l.headers);
+        setReadReceipt(l.readReceipt);
       });
       if (mine) {
         await sv.keepMine(l.revision);
@@ -906,7 +909,7 @@ function Compose({
                 onSearch={api.searchContacts}
                 t={t}
               />
-              <Headers items={headers} t={t} />
+              <Headers items={headers} readReceipt={readReceipt} t={t} />
               {/* The body: locked while Wit writes or an edit waits (typing there toasts why, once). */}
               <div ref={bodyRef} className="flex flex-col">
                 {reloadErr && (
