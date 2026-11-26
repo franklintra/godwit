@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	netmail "net/mail"
 	"slices"
 	"strconv"
 	"strings"
@@ -21,7 +22,7 @@ import (
 const maxBody = 64 << 10
 
 var tools = []tool{
-	{"list_accounts", "List the mail accounts: ID, address, name and which one is the default.", true,
+	{"list_accounts", "List the mail accounts: ID, address, name and which one is the default, and the other addresses (identities) each can send as.", true,
 		`{"type":"object","additionalProperties":false}`, listAccounts},
 	{"list_folders", "List an account's folders with their IDs, roles and unread counts.", true,
 		`{"type":"object","properties":{"account_id":{"type":"integer","minimum":1}},"required":["account_id"],"additionalProperties":false}`, listFolders},
@@ -43,8 +44,8 @@ var tools = []tool{
 		`{"type":"object","properties":{"account_id":{"type":"integer","minimum":1}},"required":["account_id"],"additionalProperties":false}`, listDrafts},
 	{"get_draft", "Get a draft: recipients, subject, its editable body, the quoted mail and the signature, and its revision (update_draft needs it).", true,
 		draftArgs, getDraft},
-	{"create_draft", "Create a draft for the user to review and send; it is not sent. For a reply give reply_to_message_id (and reply_all to answer everyone): the draft is in that message's account, addressed and quoted for you, and to, cc and subject override only if given. A new draft needs to and subject and uses account_id or the default account. body is plain text.", false,
-		`{"type":"object","properties":{"to":{"type":"array","items":{"type":"string"}},"cc":{"type":"array","items":{"type":"string"}},"subject":{"type":"string"},"body":{"type":"string"},"account_id":{"type":"integer","minimum":1},"reply_to_message_id":{"type":"integer","minimum":1},"reply_all":{"type":"boolean"}},"required":["body"],"additionalProperties":false}`, createDraft},
+	{"create_draft", "Create a draft for the user to review and send; it is not sent. For a reply give reply_to_message_id (and reply_all to answer everyone): the draft is in that message's account, addressed and quoted for you, and to, cc and subject override only if given. A new draft needs to and subject and uses account_id or the default account. from picks the address the draft is sent as: the account's own or one of its identities from list_accounts (a name and address, or just the address); left out, a reply goes from the address the message was sent to and a new draft from the account's default. body is plain text.", false,
+		`{"type":"object","properties":{"to":{"type":"array","items":{"type":"string"}},"cc":{"type":"array","items":{"type":"string"}},"subject":{"type":"string"},"body":{"type":"string"},"account_id":{"type":"integer","minimum":1},"from":{"type":"string","minLength":1},"reply_to_message_id":{"type":"integer","minimum":1},"reply_all":{"type":"boolean"}},"required":["body"],"additionalProperties":false}`, createDraft},
 	{"update_draft", "Change a draft's subject, to, cc or plain-text body; fields left out stay as they are, and the quote and signature are kept. revision is the draft's from get_draft: if the draft changed since, nothing is saved; read it again.", false,
 		`{"type":"object","properties":{"draft_id":{"type":"integer","minimum":1},"revision":{"type":"integer","minimum":1},"subject":{"type":"string"},"to":{"type":"array","items":{"type":"string"}},"cc":{"type":"array","items":{"type":"string"}},"body":{"type":"string"}},"required":["draft_id","revision"],"additionalProperties":false}`, updateDraft},
 	{"send_draft", "Ask Godwit to send a draft as it is at revision (from get_draft). The user's Send through MCP setting decides: off fails; confirm (the default) returns at once while Godwit asks the user, who may decline; direct queues it in the outbox. If the draft changed since revision, nothing is sent; read it again.", false,
@@ -67,6 +68,10 @@ func listAccounts(ctx context.Context, c *rpc.Client, _ json.RawMessage) (string
 	if err := c.Call(ctx, "ListAccounts", &accs); err != nil {
 		return "", err
 	}
+	var ids []core.Identity
+	if err := c.Call(ctx, "ListIdentities", &ids, 0); err != nil {
+		return "", err
+	}
 	var b strings.Builder
 	for _, a := range accs {
 		fmt.Fprintf(&b, "account %d · %s · %s", a.ID, a.Email, a.Name)
@@ -74,6 +79,15 @@ func listAccounts(ctx context.Context, c *rpc.Client, _ json.RawMessage) (string
 			b.WriteString(" · default")
 		}
 		b.WriteByte('\n')
+		for _, i := range ids {
+			if i.AccountID == a.ID {
+				fmt.Fprintf(&b, "  also sends as %s", identityAddr(a, i))
+				if i.IsDefault {
+					b.WriteString(" · default for new mail")
+				}
+				b.WriteByte('\n')
+			}
+		}
 	}
 	return orNone(b.String(), "no accounts"), nil
 }
@@ -466,12 +480,66 @@ func (e edit) apply(d *core.Draft) {
 	}
 }
 
+// identityAddr is the From address mail from acc as i is sent with.
+func identityAddr(acc core.Account, i core.Identity) string {
+	return (&netmail.Address{Name: cmp.Or(i.Name, acc.Name), Address: i.Email}).String()
+}
+
+// resolveFrom is the identity of account the address from names (0: the
+// account's own address): a name with it must match too. Of several with
+// the address, the default identity wins, then the account's own, then the
+// first added. An address the account cannot send as is an error.
+func resolveFrom(ctx context.Context, c *rpc.Client, account int64, from string) (int64, error) {
+	want, err := netmail.ParseAddress(from)
+	if err != nil {
+		return 0, fmt.Errorf("from %q is not an email address", from)
+	}
+	var accs []core.Account
+	if err := c.Call(ctx, "ListAccounts", &accs); err != nil {
+		return 0, err
+	}
+	i := slices.IndexFunc(accs, func(a core.Account) bool { return a.ID == account })
+	if i < 0 {
+		return 0, fmt.Errorf("account %d not found", account)
+	}
+	acc := accs[i]
+	var ids []core.Identity
+	if err := c.Call(ctx, "ListIdentities", &ids, account); err != nil {
+		return 0, err
+	}
+	key := mail.AddrKey(want.Address)
+	fits := func(name, addr string) bool {
+		return mail.AddrKey(addr) == key && (want.Name == "" || want.Name == name)
+	}
+	var match []core.Identity
+	for _, id := range ids {
+		if fits(cmp.Or(id.Name, acc.Name), id.Email) {
+			match = append(match, id)
+		}
+	}
+	if j := slices.IndexFunc(match, func(id core.Identity) bool { return id.IsDefault }); j >= 0 {
+		return match[j].ID, nil
+	}
+	if fits(acc.Name, acc.Email) {
+		return 0, nil
+	}
+	if len(match) > 0 {
+		return match[0].ID, nil
+	}
+	addrs := []string{(&netmail.Address{Name: acc.Name, Address: acc.Email}).String()}
+	for _, id := range ids {
+		addrs = append(addrs, identityAddr(acc, id))
+	}
+	return 0, fmt.Errorf("account %d cannot send as %s; it sends as %s", account, from, strings.Join(addrs, ", "))
+}
+
 func createDraft(ctx context.Context, c *rpc.Client, args json.RawMessage) (string, error) {
 	var a struct {
 		edit
-		AccountID int64 `json:"account_id"`
-		ReplyTo   int64 `json:"reply_to_message_id"`
-		ReplyAll  bool  `json:"reply_all"`
+		AccountID int64  `json:"account_id"`
+		From      string `json:"from"`
+		ReplyTo   int64  `json:"reply_to_message_id"`
+		ReplyAll  bool   `json:"reply_all"`
 	}
 	if err := decode(args, &a); err != nil {
 		return "", err
@@ -509,9 +577,28 @@ func createDraft(ctx context.Context, c *rpc.Client, args json.RawMessage) (stri
 			return "", errors.New("no default account; give account_id")
 		}
 	}
+	identity := int64(-1) // as NewDraft picks it
+	if a.From != "" {
+		id, err := resolveFrom(ctx, c, account, a.From)
+		if err != nil {
+			return "", err // checked before a draft is made
+		}
+		identity = id
+	}
 	var d core.Draft
-	if err := c.Call(ctx, "NewDraft", &d, account, mode, a.ReplyTo); err != nil {
+	err := c.Call(ctx, "NewDraft", &d, account, mode, a.ReplyTo)
+	if err != nil {
 		return "", err
+	}
+	if identity >= 0 && d.AccountID != account { // a receive-only account's mail is answered from another
+		if identity, err = resolveFrom(ctx, c, d.AccountID, a.From); err != nil {
+			return "", fmt.Errorf("draft %d was made from account %d: %w", d.ID, d.AccountID, err)
+		}
+	}
+	if identity >= 0 && identity != d.IdentityID {
+		if err := c.Call(ctx, "SetDraftFrom", &d, d.ID, d.AccountID, identity, d.Revision); err != nil {
+			return "", err
+		}
 	}
 	return save(ctx, c, d.ID, 0, a.edit)
 }
@@ -620,6 +707,9 @@ func draft(b *strings.Builder, d core.Draft, full bool) {
 		fmt.Fprintf(b, " to message %d", d.SourceMessageID)
 	}
 	fmt.Fprintf(b, " · revision %d · saved %s\n", d.Revision, stamp(d.UpdatedAt))
+	if d.From != "" { // the user's own account or identity
+		fmt.Fprintf(b, "from %s\n", d.From)
+	}
 	id := fmt.Sprintf("draft-%d", d.ID)
 	untrusted(b, id, "to", strings.Join(d.To, ", "))
 	untrusted(b, id, "cc", strings.Join(d.Cc, ", "))
