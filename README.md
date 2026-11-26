@@ -68,10 +68,24 @@ For the Microsoft Store version, verify `Godwit.exe` in its install folder (`Get
 godwit [--data-dir DIR]                                the desktop app
 godwit --headless [--data-dir DIR]                     serve the Local API without a window
 godwit call [--data-dir DIR] METHOD [JSON_ARGS_ARRAY]  call the running Godwit once
+godwit open [--data-dir DIR] TARGET                    show TARGET in Godwit's window
 godwit mcp [--data-dir DIR]                            an MCP server on stdio for agents
 godwit dev-sync-db                                    replace the dev database from production (development builds only)
 godwit --version
 ```
+
+### Show a draft or a message from a script
+
+A program can prepare a draft and put it on screen for you to review; nothing is sent until you click Send ([ADR 0045](docs/adr/0045-open-from-outside.md)). With the Local API on:
+
+```sh
+godwit call FindMessagesByMessageID '["<CAF=abc@mail.example.com>"]'  # account, thread and folder of each copy
+godwit call NewDraft '[3,"reply",123]'                                 # account 3, a reply to message 123
+godwit call OpenDraft '[45]'                                           # draft 45 in a compose window
+godwit call OpenMessage '[123]'                                        # message 123 in the main window
+```
+
+`godwit open TARGET` does the same without the Local API: `draft:45`, `message:123`, `compose`, a `mailto:` link, or a `godwit:` link such as `godwit://reply?message-id=<id@host>&body=Thanks` or `godwit://compose?to=a@example.com&subject=Hi`. On macOS you can choose Godwit as your mail app in Mail › Settings › General › Default email reader.
 
 ### Receive mail from login on Linux
 
