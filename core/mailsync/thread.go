@@ -121,7 +121,7 @@ func subjectThread(ctx context.Context, db *store.DB, a *account, p *mail.Parsed
 	if key == "" {
 		return 0, nil
 	}
-	mine := participants(a.email, append([]string{p.From}, append(p.To, p.Cc...)...))
+	mine := participants(a.selves, append([]string{p.From}, append(p.To, p.Cc...)...))
 	if len(mine) == 0 {
 		return 0, nil
 	}
@@ -139,7 +139,7 @@ func subjectThread(ctx context.Context, db *store.DB, a *account, p *mail.Parsed
 		var to, cc []string
 		json.Unmarshal([]byte(store.Str(r[3])), &to)
 		json.Unmarshal([]byte(store.Str(r[4])), &cc)
-		for k := range participants(a.email, append([]string{store.Str(r[2])}, append(to, cc...)...)) {
+		for k := range participants(a.selves, append([]string{store.Str(r[2])}, append(to, cc...)...)) {
 			if mine[k] {
 				return store.Int(r[0]), nil
 			}
@@ -148,11 +148,15 @@ func subjectThread(ctx context.Context, db *store.DB, a *account, p *mail.Parsed
 	return 0, nil
 }
 
-func participants(self string, addrs []string) map[string]bool {
+// participants are the AddrKeys of addrs but the user's own (self).
+func participants(self []string, addrs []string) map[string]bool {
+	own := map[string]bool{}
+	for _, s := range self {
+		own[mail.AddrKey(s)] = true
+	}
 	out := map[string]bool{}
-	self = mail.AddrKey(self)
 	for _, s := range addrs {
-		if k := mail.AddrKey(s); k != "" && k != self {
+		if k := mail.AddrKey(s); k != "" && !own[k] {
 			out[k] = true
 		}
 	}

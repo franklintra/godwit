@@ -44,6 +44,14 @@ type Draft struct {
 	// ScheduledFor is the original send time of a scheduled message taken back
 	// from the outbox, or zero if none. SaveDraft ignores this field.
 	ScheduledFor time.Time
+	// IdentityID is the account's 发件身份 the draft is sent as, 0 for the
+	// account's own address (ADR 0045). SaveDraft takes it only when it
+	// inserts a draft, as one of AccountID's identities; SetDraftFrom
+	// changes it afterwards.
+	IdentityID int64
+	// From is the From header the draft is sent with, from its account and
+	// identity. SaveDraft ignores this field.
+	From string
 }
 
 // DraftAttachment is a file copied into the draft's directory.
@@ -152,7 +160,7 @@ func (s *Service) buildDraft(ctx context.Context, accountID int64, mode string, 
 			return Draft{}, ErrLocalArchive
 		}
 	}
-	self := acc.Email    // whose mail is answered: its own sent mail and address are the user's
+	self := acc.ID       // whose mail is answered: its own sent mail and addresses are the user's
 	if acc.ReceiveOnly { // so is a receive-only account's, and its new mail
 		if acc, err = s.draftAccount(ctx, 0); err != nil {
 			return Draft{}, ErrReceiveOnly
@@ -163,16 +171,31 @@ func (s *Service) buildDraft(ctx context.Context, accountID int64, mode string, 
 	if err != nil {
 		return Draft{}, err
 	}
+	ids, err := s.ListIdentities(ctx, acc.ID)
+	if err != nil {
+		return Draft{}, err
+	}
+	var from *Identity // new mail starts from the default identity (none: the account's address)
+	for i := range ids {
+		if ids[i].IsDefault {
+			from = &ids[i]
+		}
+	}
 	if mode != "new" {
 		orig, err := s.sourceMessage(ctx, accountID, sourceMessageID)
 		if err != nil {
 			return Draft{}, err
 		}
+		from = replyIdentity(acc, ids, orig) // answered from the address it was sent to
 		d.SourceMessageID = sourceMessageID
 		if mode == "forward" {
 			d.Subject = mail.ForwardSubject(orig.Subject)
 		} else {
-			d.To, d.Cc = mail.ReplyRecipients(orig, self, mode == "reply_all")
+			selves, err := s.accountAddresses(ctx, self, acc.ID)
+			if err != nil {
+				return Draft{}, err
+			}
+			d.To, d.Cc = mail.ReplyRecipients(orig, selves[0], mode == "reply_all", selves[1:]...)
 			d.Subject = mail.ReplySubject(orig.Subject)
 		}
 		d.Subject = defuseRefs(d.Subject) // a reference planted in the mail would block sending the reply
@@ -181,19 +204,27 @@ func (s *Service) buildDraft(ctx context.Context, accountID int64, mode string, 
 		lang := cmp.Or(st.ReadingLanguage, st.UILanguage, s.opts.SystemLanguage)
 		d.HTML = `<p></p><blockquote data-godwit="quote" style="margin:0;padding:0;border:0">` + defuseRefs(mail.QuoteHTMLIn(orig, lang)) + "</blockquote>"
 	}
+	if from != nil {
+		d.IdentityID, d.ReplyTo = from.ID, from.ReplyTo
+	}
 	cids, err := s.signatureCIDs(ctx)
 	if err != nil {
 		return Draft{}, err
 	}
-	d.HTML = withSignature(d.HTML, acc, cids, st.SignatureDelimiter)
+	sig, err := s.signatureOf(ctx, acc, from)
+	if err != nil {
+		return Draft{}, err
+	}
+	d.HTML = withSignature(d.HTML, sig, cids, st.SignatureDelimiter)
 	return d, nil
 }
 
-// withSignature is body with acc's signature in place of its own, above the
-// quote (mail.JoinDraft); NewDraft and SetDraftAccount both sign through it.
-func withSignature(body string, acc Account, cids map[string]bool, delim bool) string {
+// withSignature is body with the stored signature sig in place of its own,
+// above the quote (mail.JoinDraft); NewDraft and SetDraftFrom both sign
+// through it.
+func withSignature(body, sig string, cids map[string]bool, delim bool) string {
 	ed, quote, _ := mail.SplitDraft(body)
-	return mail.JoinDraft(ed, quote, signatureHTML(acc.Signature, cids, delim))
+	return mail.JoinDraft(ed, quote, signatureHTML(sig, cids, delim))
 }
 
 // SignatureHTMLPrefix marks a stored signature as the settings editor's HTML;
@@ -340,10 +371,15 @@ func (s *Service) saveDraft(ctx context.Context, d Draft) (out Draft, err error)
 		if local, err := s.localArchive(ctx, d.AccountID); local || err != nil {
 			return Draft{}, cmp.Or(err, ErrLocalArchive)
 		}
+		if d.IdentityID != 0 {
+			if _, err := s.identity(ctx, d.IdentityID, d.AccountID); err != nil {
+				return Draft{}, err
+			}
+		}
 		r, err := s.db.Execute(ctx, `INSERT INTO drafts(account_id, mode, source_message_id, to_addrs, cc_addrs, bcc_addrs,
-			reply_to, subject, body_html, updated_at, from_program) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			reply_to, subject, body_html, updated_at, from_program, identity_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			d.AccountID, d.Mode, nullID(d.SourceMessageID), encodeList(d.To), encodeList(d.Cc), encodeList(d.Bcc),
-			d.ReplyTo, d.Subject, d.HTML, now, fromProgram(ctx))
+			d.ReplyTo, d.Subject, d.HTML, now, fromProgram(ctx), nullID(d.IdentityID))
 		if err != nil {
 			return Draft{}, err
 		}
@@ -418,8 +454,12 @@ func (s *Service) DraftForApproval(ctx context.Context, approvalID int64) (int64
 
 // read, covering rows stored before SaveDraft sanitized.
 func (s *Service) GetDraft(ctx context.Context, id int64) (Draft, error) {
-	rows, err := s.db.Query(ctx, `SELECT account_id, mode, source_message_id, to_addrs, cc_addrs, bcc_addrs, reply_to,
-		subject, body_html, updated_at, revision, from_program, scheduled_for FROM drafts WHERE id = ?`, id)
+	// An identity of another account (none should be) sends as the account itself.
+	rows, err := s.db.Query(ctx, `SELECT d.account_id, d.mode, d.source_message_id, d.to_addrs, d.cc_addrs, d.bcc_addrs, d.reply_to,
+		d.subject, d.body_html, d.updated_at, d.revision, d.from_program, d.scheduled_for, COALESCE(i.id, 0),
+		COALESCE(a.name, ''), COALESCE(a.email, ''), COALESCE(i.name, ''), COALESCE(i.email, '')
+		FROM drafts d LEFT JOIN accounts a ON a.id = d.account_id LEFT JOIN identities i ON i.id = d.identity_id AND i.account_id = d.account_id
+		WHERE d.id = ?`, id)
 	if err != nil {
 		return Draft{}, err
 	}
@@ -430,7 +470,8 @@ func (s *Service) GetDraft(ctx context.Context, id int64) (Draft, error) {
 	d := Draft{ID: id, AccountID: store.Int(r[0]), Mode: store.Str(r[1]), SourceMessageID: store.Int(r[2]),
 		To: jsonList(store.Str(r[3])), Cc: jsonList(store.Str(r[4])), Bcc: jsonList(store.Str(r[5])),
 		ReplyTo: store.Str(r[6]), Subject: store.Str(r[7]), UpdatedAt: time.Unix(store.Int(r[9]), 0), Revision: store.Int(r[10]),
-		FromProgram: store.Int(r[11]) != 0, ScheduledFor: unixMilli(r[12])}
+		FromProgram: store.Int(r[11]) != 0, ScheduledFor: unixMilli(r[12]), IdentityID: store.Int(r[13]),
+		From: fromHeader(store.Str(r[14]), store.Str(r[15]), store.Str(r[16]), store.Str(r[17]))}
 	if d.HTML, err = s.sanitizeDraft(ctx, store.Str(r[8])); err != nil {
 		return Draft{}, err
 	}
@@ -784,7 +825,9 @@ func (s *Service) enqueue(ctx context.Context, draftID, rev int64, checked []str
 	if acc.ReceiveOnly {
 		return ErrReceiveOnly
 	}
-	o := mail.Outgoing{From: (&netmail.Address{Name: acc.Name, Address: acc.Email}).String(), ReplyTo: d.ReplyTo,
+	// From is the account's or its identity's (GetDraft); the envelope sender
+	// stays the account's own address (sendItem).
+	o := mail.Outgoing{From: d.From, ReplyTo: d.ReplyTo,
 		To: d.To, Cc: d.Cc, Bcc: d.Bcc, Subject: d.Subject, HTML: d.HTML, Related: related}
 	var stmts []sqlite.Statement
 	if rs != nil {

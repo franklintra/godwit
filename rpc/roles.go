@@ -13,7 +13,9 @@ const (
 // (including SearchContacts over local mail and cached address-book contacts,
 // with no binary avatars or network requests, and the views: their stored
 // definitions, conversations and why each is there, marking nothing read),
-// drafts, and RequestMCPSend, whose outcome core decides by the user's 通过 MCP 发送 setting. Nothing else
+// drafts (SetDraftFrom picks the account and 发件身份 a draft is sent as,
+// as NewDraft picks the account; ListIdentities reads the stored ones),
+// and RequestMCPSend, whose outcome core decides by the user's 通过 MCP 发送 setting. Nothing else
 // sends, and nothing here deletes, changes accounts, address books, settings,
 // extensions or model services, decides approvals or downloads attachments.
 // SetThreadDeadline sets or clears one conversation's 期限 on this device
@@ -23,6 +25,7 @@ var mcpMethods = map[string]bool{
 	"ListAccounts": true, "ListFolders": true, "ListThreads": true, "GetThread": true,
 	"ListMessages": true, "GetMessageText": true, "Search": true, "SearchContacts": true,
 	"ListDrafts": true, "GetDraft": true, "NewDraft": true, "SaveDraft": true,
+	"ListIdentities": true, "SetDraftFrom": true,
 	"SavedViews": true, "ViewContents": true, "ViewGroupPage": true,
 	"RequestMCPSend": true, "SetThreadDeadline": true,
 }

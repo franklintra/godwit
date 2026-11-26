@@ -119,7 +119,7 @@ func (s *Service) scanSecurityBatch(ctx context.Context) (int, error) {
 	}
 
 	// Load own account addresses to normalize and avoid running AI scan on own mail
-	accountRows, err := s.db.Query(ctx, "SELECT email FROM accounts")
+	accountRows, err := s.db.Query(ctx, ownEmails) // accounts' and 发件身份' addresses
 	if err != nil {
 		return 0, err
 	}

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"html"
 	"log/slog"
+	netmail "net/mail"
 	"regexp"
 	"slices"
 	"strings"
@@ -289,7 +290,7 @@ func (s *Service) assistSystemPrompt(ctx context.Context, job *runJob, tools []t
 		if err != nil {
 			return "", err
 		}
-		return selectionSystem + "\n\n" + answer + "\n\n" + rewriteSender + "\n\n" + senderBlock(acc), nil
+		return selectionSystem + "\n\n" + answer + "\n\n" + rewriteSender + "\n\n" + senderBlock(acc, d), nil
 	}
 	target, err := s.draftLanguage(ctx, d)
 	if err != nil {
@@ -310,12 +311,17 @@ func (s *Service) assistSystemPrompt(ctx context.Context, job *runJob, tools []t
 	return assistSystem + " " + timeSystem + "\n\n" + ai.UntrustedSystemNote + "\n\n" + answer + "Write the draft in " + target + ".\n\n" + c, nil
 }
 
-// senderBlock is what the user told Wit about themselves as the sender from
-// acc, escaped so that it stays one block.
-func senderBlock(acc Account) string {
-	b := "The user sending this draft:\n<sender>\n<email>" + html.EscapeString(acc.Email) + "</email>"
-	if acc.Name != "" {
-		b += "\n<name>" + html.EscapeString(acc.Name) + "</name>"
+// senderBlock is what the user told Wit about themselves as the sender of
+// d from acc, escaped so that it stays one block: the name and address d
+// is sent as (its 发件身份's, if it has one) and acc's instructions.
+func senderBlock(acc Account, d Draft) string {
+	email, name := acc.Email, acc.Name
+	if a, err := netmail.ParseAddress(d.From); err == nil {
+		email, name = a.Address, a.Name
+	}
+	b := "The user sending this draft:\n<sender>\n<email>" + html.EscapeString(email) + "</email>"
+	if name != "" {
+		b += "\n<name>" + html.EscapeString(name) + "</name>"
 	}
 	if acc.AIInstructions != "" {
 		b += "\n<instructions>\n" + html.EscapeString(acc.AIInstructions) + "\n</instructions>"
@@ -352,7 +358,7 @@ func (s *Service) assistContext(ctx context.Context, scope *gateway.Scope, d Dra
 	if err != nil {
 		return "", nil, err
 	}
-	b.WriteString(senderBlock(acc) + "\n\n")
+	b.WriteString(senderBlock(acc, d) + "\n\n")
 	if d.SourceMessageID == 0 {
 		b.WriteString("The draft's subject:\n<subject>\n" + d.Subject + "\n</subject>\n\n")
 	} else {
@@ -845,7 +851,7 @@ func (s *Service) assistSkill(ctx context.Context, end func(), draftID int64, na
 		if err != nil {
 			return nil, err
 		}
-		system := sk.Body + "\n\n" + ai.UntrustedSystemNote + "\n\n" + rewriteSender + "\n\n" + senderBlock(acc)
+		system := sk.Body + "\n\n" + ai.UntrustedSystemNote + "\n\n" + rewriteSender + "\n\n" + senderBlock(acc, d)
 		if name == "translate-draft" { // never "the original's language": the skill does not see it
 			system += "\n\nTarget language: " + target + "."
 		}

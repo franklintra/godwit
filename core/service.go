@@ -233,6 +233,7 @@ type Service struct {
 	hookWakes         map[chan struct{}]struct{} // each running dispatcher's wake-up
 	labelsMu          sync.Mutex                 // label writes: a name is checked and saved under it
 	sigMu             sync.Mutex                 // signature writes (read, images stored, HTML saved, unused images cleaned), and a draft taking a signature; before editMu
+	identityMu        sync.Mutex                 // identity writes: the uniqueness check and the write
 	labelWake         chan struct{}              // wakes the label classifier
 	summaryWake       chan struct{}              // wakes 收到就总结's summarizer
 	securityMu        sync.Mutex                 // scan admission and progress scope

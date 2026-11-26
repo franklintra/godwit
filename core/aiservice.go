@@ -413,7 +413,11 @@ func (s *Service) QuickReplies(ctx context.Context, messageID int64) ([]QuickRep
 	if err != nil {
 		return nil, err
 	}
-	if store.Int(r0[2]) != 0 || mail.AddrKey(store.Str(r0[0])) == mail.AddrKey(acc.Email) {
+	selves, err := s.accountAddresses(ctx, acc.ID) // its address and its identities'
+	if err != nil {
+		return nil, err
+	}
+	if store.Int(r0[2]) != 0 || isOneOf(store.Str(r0[0]), selves) {
 		return nil, nil
 	}
 	model, _, err := s.resolveTask(ctx, "", true)
@@ -428,7 +432,7 @@ func (s *Service) QuickReplies(ctx context.Context, messageID int64) ([]QuickRep
 		system += "Write the replies in the language of the email."
 	}
 	// Outside the untrusted blocks: which one to answer, and whose the rest are.
-	tail := fmt.Sprintf("Reply to message:%d. Messages from %s are the user's own.", messageID, acc.Email)
+	tail := fmt.Sprintf("Reply to message:%d. Messages from %s are the user's own.", messageID, strings.Join(selves, " or "))
 	if acc.Signature != "" {
 		tail += " The user's signature is added below the reply, so end it without a sign-off or name."
 	}

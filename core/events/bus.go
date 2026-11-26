@@ -24,6 +24,7 @@ const (
 	ImportProgress      = "import.progress"       // an .eml import into AccountID handled Done of Total files
 	AddressBooksChanged = "address_books.changed" // address books, collections, order or synced cards changed
 	DraftsChanged       = "drafts.changed"        // a program created or changed a draft (ADR 0043)
+	IdentitiesChanged   = "identities.changed"    // an account's 发件身份 were added, changed or removed (ADR 0045)
 	// NotificationClicked: the backend got a click on notification Notification
 	// while a ui client is connected; the interface opens what it shows. With
 	// none, the backend starts the interface for it instead.

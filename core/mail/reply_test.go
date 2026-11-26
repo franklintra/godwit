@@ -46,6 +46,19 @@ func TestFromSelf(t *testing.T) {
 	assert.False(t, mail.FromSelf("", "", ""))
 }
 
+// The user's other addresses (the account's 发件身份) count as self too.
+func TestReplyRecipientsIdentities(t *testing.T) {
+	o := &mail.Parsed{From: "A <a@x.com>", To: []string{"Shop <Shop@x.com>", "me@x.com"}, Cc: []string{"c@x.com", "sales@x.com"}}
+	to, cc := mail.ReplyRecipients(o, "me@x.com", true, "shop@x.com", "sales@x.com")
+	assert.Equal(t, []string{"A <a@x.com>"}, to)
+	assert.Equal(t, []string{"c@x.com"}, cc)
+	o = &mail.Parsed{From: "Shop <shop@x.com>", ReplyTo: "sales@x.com", To: []string{"j@x.com"}}
+	to, _ = mail.ReplyRecipients(o, "me@x.com", false, "shop@x.com", "sales@x.com")
+	assert.Equal(t, []string{"j@x.com"}, to, "the user's own mail, its Reply-To another of their addresses")
+	assert.True(t, mail.FromSelf("shop@x.com", "", "me@x.com", "Shop <SHOP@x.com>"))
+	assert.False(t, mail.FromSelf("shop@x.com", ""))
+}
+
 func TestSubjects(t *testing.T) {
 	assert.Equal(t, "Re: Q4", mail.ReplySubject("Re: Q4"))
 	assert.Equal(t, "Re: 报销", mail.ReplySubject("报销"))

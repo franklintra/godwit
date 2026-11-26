@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	netmail "net/mail"
 	"slices"
 	"time"
 
@@ -162,7 +163,11 @@ func (s *Service) RequestMCPSend(ctx context.Context, draftID, revision int64) (
 	}
 	s.sendReqID++
 	id := s.sendReqID
-	s.sendReqs[id] = &mcpSend{draftID: draftID, revision: revision, created: time.Now(), from: acc.Email, firstTime: first}
+	from := acc.Email // the address it is sent as: the account's or its identity's (ADR 0045)
+	if a, err := netmail.ParseAddress(d.From); err == nil {
+		from = a.Address
+	}
+	s.sendReqs[id] = &mcpSend{draftID: draftID, revision: revision, created: time.Now(), from: from, firstTime: first}
 	s.sendReqMu.Unlock()
 	if !s.UIConnected() && (s.opts.NotifyMCPSend == nil || !s.opts.NotifyMCPSend(id)) {
 		s.sendReqMu.Lock()
@@ -351,19 +356,23 @@ func (s *Service) auditMCPSend(ctx context.Context, draftID int64, decision stri
 }
 
 // firstTime are d's recipients the account has never written to: no message
-// of the account from its address has them in To or Cc.
+// of the account from its address or one of its identities' has them in To
+// or Cc.
 func (s *Service) firstTime(ctx context.Context, acc Account, d Draft) ([]string, error) {
 	rcpts, err := recipients(d)
 	if err != nil {
 		return nil, nil // not sendable: confirming fails anyway
 	}
-	self := mail.AddrKey(acc.Email)
+	selves, err := s.accountAddresses(ctx, acc.ID)
+	if err != nil {
+		return nil, err
+	}
 	var out []string
 	for _, a := range rcpts {
 		k := mail.AddrKey(a)
 		is := func(x string) bool { return mail.AddrKey(x) == k }
 		ms, err := s.mailWith(ctx, acc.ID, k, 1, []string{"to_addrs", "cc_addrs"}, func(m MessageSummary) bool {
-			return mail.AddrKey(m.From) == self && (slices.ContainsFunc(m.To, is) || slices.ContainsFunc(m.Cc, is))
+			return isOneOf(m.From, selves) && (slices.ContainsFunc(m.To, is) || slices.ContainsFunc(m.Cc, is))
 		})
 		if err != nil {
 			return nil, err

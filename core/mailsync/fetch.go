@@ -43,6 +43,7 @@ var headerFields = []string{"MESSAGE-ID", "DATE", "SUBJECT", "FROM", "TO", "CC",
 type account struct {
 	id        int64
 	email     string
+	selves    []string // email and the account's 发件身份' addresses: the user's own
 	limit     int
 	months    int
 	cursor    string // the backend's account cursor
@@ -622,8 +623,17 @@ func loadAccount(ctx context.Context, db *store.DB, accountID int64) (*account, 
 	if len(rows.Values) == 0 {
 		return nil, fmt.Errorf("account %d not found", accountID)
 	}
-	return &account{id: accountID, email: store.Str(rows.Values[0][0]), limit: int(store.Int(rows.Values[0][1])),
-		months: int(store.Int(rows.Values[0][2])), cursor: store.Str(rows.Values[0][3]), inboxOnly: store.Int(rows.Values[0][4]) != 0}, nil
+	a := &account{id: accountID, email: store.Str(rows.Values[0][0]), limit: int(store.Int(rows.Values[0][1])),
+		months: int(store.Int(rows.Values[0][2])), cursor: store.Str(rows.Values[0][3]), inboxOnly: store.Int(rows.Values[0][4]) != 0}
+	ids, err := db.Query(ctx, "SELECT email FROM identities WHERE account_id = ?", accountID)
+	if err != nil {
+		return nil, err
+	}
+	a.selves = []string{a.email}
+	for _, r := range ids.Values {
+		a.selves = append(a.selves, store.Str(r[0]))
+	}
+	return a, nil
 }
 
 // resetFolder drops everything known about the folder's server locations, which
