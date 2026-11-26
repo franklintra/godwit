@@ -5,8 +5,8 @@ import viteConfig from "./vite.config.ts";
 export default mergeConfig(
   viteConfig,
   defineConfig({
-    // The ⌘K contract's shared cases live in webui/testdata.
-    server: { fs: { allow: [".", "../webui/testdata"] } },
+    // Shared cases with Go: the ⌘K contract's in webui/testdata, the plain body's in core/mail/testdata.
+    server: { fs: { allow: [".", "../webui/testdata", "../core/mail/testdata"] } },
     test: {
       environment: "jsdom",
       globals: true,

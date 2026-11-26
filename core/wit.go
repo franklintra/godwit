@@ -834,6 +834,9 @@ type draftArgs struct {
 	Cc        []string `json:"cc"`
 	Subject   string   `json:"subject"`
 	HTML      string   `json:"html"`
+	// Format is the draft's, as NewDraft would choose it; set by prepareDraft
+	// whatever the model passed.
+	Format string `json:"format,omitempty"`
 }
 
 // prepareDraft resolves the account (the default one if none is given),
@@ -868,6 +871,9 @@ func (s *Service) prepareDraft(ctx context.Context, _ Conversation, args json.Ra
 	}
 	if in.HTML, err = s.sanitizeDraft(ctx, mail.StripMarkers(ensureHTML(in.HTML))+d.HTML); err != nil {
 		return prepared{}, err
+	}
+	if in.Format = d.Format; in.Format == FormatPlain {
+		in.HTML = plainDraft(in.HTML)
 	}
 	b, err := json.Marshal(in)
 	if err != nil {
@@ -960,8 +966,8 @@ func (s *Service) applyDraft(_ context.Context, a Approval) ([]sqlite.Statement,
 		return nil, nil, nil, err
 	}
 	return []sqlite.Statement{{SQL: `INSERT INTO drafts(account_id, mode, to_addrs, cc_addrs, bcc_addrs, reply_to, subject, body_html,
-		updated_at, ai_approval_id, from_program) VALUES (?, 'new', ?, ?, '[]', '', ?, ?, ?, ?, 1)`,
-			Args: []any{in.AccountID, encodeList(in.To), encodeList(in.Cc), in.Subject, in.HTML, time.Now().Unix(), a.ID}}},
+		updated_at, ai_approval_id, from_program, format) VALUES (?, 'new', ?, ?, '[]', '', ?, ?, ?, ?, 1, ?)`,
+			Args: []any{in.AccountID, encodeList(in.To), encodeList(in.Cc), in.Subject, in.HTML, time.Now().Unix(), a.ID, cmp.Or(in.Format, FormatHTML)}}},
 		map[string]any{"created": true, "subject": in.Subject}, nil, nil
 }
 
@@ -1365,6 +1371,7 @@ type replyForwardArgs struct {
 	Cc              []string `json:"cc"`
 	Subject         string   `json:"subject"`
 	HTML            string   `json:"html"`
+	Format          string   `json:"format,omitempty"` // the draft's, as NewDraft would choose it
 }
 
 func (s *Service) prepareReplyMail(ctx context.Context, _ Conversation, raw json.RawMessage) (prepared, error) {
@@ -1401,7 +1408,11 @@ func (s *Service) prepareReplyMail(ctx context.Context, _ Conversation, raw json
 	if err != nil {
 		return prepared{}, err
 	}
+	if d.Format == FormatPlain {
+		sanitized = plainDraft(sanitized)
+	}
 	args := replyForwardArgs{
+		Format:          d.Format,
 		ID:              in.ID,
 		ReplyAll:        in.ReplyAll,
 		AccountID:       d.AccountID,
@@ -1463,7 +1474,11 @@ func (s *Service) prepareForwardMail(ctx context.Context, _ Conversation, raw js
 	if err != nil {
 		return prepared{}, err
 	}
+	if d.Format == FormatPlain {
+		sanitized = plainDraft(sanitized)
+	}
 	args := replyForwardArgs{
+		Format:          d.Format,
 		ID:              in.ID,
 		AccountID:       d.AccountID,
 		Mode:            "forward",
@@ -1490,8 +1505,8 @@ func (s *Service) applyReplyOrForwardDraft(ctx context.Context, a Approval) ([]s
 	if err := json.Unmarshal(a.Args, &in); err != nil {
 		return nil, nil, nil, err
 	}
-	res, err := s.db.Execute(ctx, `INSERT INTO drafts(account_id, mode, source_message_id, to_addrs, cc_addrs, bcc_addrs, reply_to, subject, body_html, updated_at, ai_approval_id, from_program) VALUES (?, ?, ?, ?, ?, '[]', '', ?, ?, ?, ?, 1)`,
-		in.AccountID, in.Mode, in.SourceMessageID, encodeList(in.To), encodeList(in.Cc), in.Subject, in.HTML, time.Now().Unix(), a.ID)
+	res, err := s.db.Execute(ctx, `INSERT INTO drafts(account_id, mode, source_message_id, to_addrs, cc_addrs, bcc_addrs, reply_to, subject, body_html, updated_at, ai_approval_id, from_program, format) VALUES (?, ?, ?, ?, ?, '[]', '', ?, ?, ?, ?, 1, ?)`,
+		in.AccountID, in.Mode, in.SourceMessageID, encodeList(in.To), encodeList(in.Cc), in.Subject, in.HTML, time.Now().Unix(), a.ID, cmp.Or(in.Format, FormatHTML))
 	if err != nil {
 		return nil, nil, nil, err
 	}

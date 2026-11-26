@@ -369,6 +369,9 @@ func (s *Service) assistContext(ctx context.Context, scope *gateway.Scope, d Dra
 	}
 	b.WriteString("The editable part of the draft, as HTML (the quoted email and the signature are not shown and stay as they are):\n<draft>\n" +
 		editable + "\n</draft>")
+	if d.Format == FormatPlain {
+		b.WriteString("\n\nThe draft is sent as plain text: write one <p> per line and no formatting; give a link as its address.")
+	}
 	if d.SourceMessageID != 0 {
 		items, err := s.mailContext(ctx, scope, []int64{d.SourceMessageID}, defaultMailBudget)
 		if err != nil {
@@ -453,6 +456,9 @@ func (s *Service) proposeUpdateWithSubject(ctx context.Context, draftID int64, s
 	h, err := edit(old, d.Revision)
 	if err != nil {
 		return prepared{}, err
+	}
+	if d.Format == FormatPlain { // proposed as it will be kept
+		h = mail.PlainHTML(mail.PlainText(h))
 	}
 	newSubject := subject != nil && strings.TrimSpace(*subject) != "" && *subject != d.Subject // a blank subject would erase it unseen
 	if !mail.Blank(old) && !newSubject && sameHTML(old, h) {

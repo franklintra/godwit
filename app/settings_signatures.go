@@ -1,6 +1,7 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"net/url"
@@ -132,7 +133,35 @@ func (p *settingsPage) signaturesView(c *ui.Context) {
 	defer p.syncSettings() // what the switch changed while building
 	settingsSection(c, i18n.T("settings.signatures.options"), "", func() {
 		kit.FieldWith(c, kit.FieldOpts{Horizontal: true, Switch: &p.st.SignatureDelimiter}, i18n.T("settings.signatures.delimiter"), i18n.T("settings.signatures.delimiter.help"), "", nil)
+	}, func() {
+		settingRow(c, i18n.T("settings.compose.format"), i18n.T("settings.compose.format.help"), func() ui.Element {
+			sel := cmp.Or(p.st.ComposeFormat, core.FormatHTML)
+			field := settingSelect(c, i18n.T("settings.compose.format"), &sel, formatOptions())
+			if field.Changed() {
+				p.st.ComposeFormat = sel
+			}
+			return field
+		})
+	}, func() {
+		kit.FieldWith(c, kit.FieldOpts{Horizontal: true, Switch: &p.st.ReplyInKind}, i18n.T("settings.compose.reply_in_kind"), i18n.T("settings.compose.reply_in_kind.help"), "", nil)
 	})
+}
+
+// formatOptions are the draft formats (core.Draft.Format) to pick from.
+func formatOptions() []kit.Option[string] {
+	return []kit.Option[string]{{Value: core.FormatHTML, Label: i18n.T("settings.compose.format.html")},
+		{Value: core.FormatPlain, Label: i18n.T("settings.compose.format.plain")}}
+}
+
+// setAccountFormat sets the format the account's new drafts start in, ""
+// for the settings' (core.Account.ComposeFormat).
+func (p *settingsPage) setAccountFormat(accountID int64, format string) {
+	for i := range p.a.accounts {
+		if p.a.accounts[i].ID == accountID {
+			p.a.accounts[i].ComposeFormat = format
+		}
+	}
+	p.patch(accountID, core.AccountPatch{ComposeFormat: &format}, nil)
 }
 
 // sigForm is the shown signature's name field: typing saves once it
@@ -401,6 +430,16 @@ func (p *settingsPage) accountSignatureView(c *ui.Context, acc core.Account) {
 			field := settingSelect(c, i18n.T("settings.account.signature.default"), &sel, opts)
 			if sel != acc.SignatureID && (cur != nil || sel != 0) {
 				p.setAccountSignature(acc.ID, sel)
+			}
+			return field
+		})
+	}, func() {
+		settingRow(c, i18n.T("settings.compose.format"), i18n.T("settings.account.format.help"), func() ui.Element {
+			sel := acc.ComposeFormat
+			opts := append([]kit.Option[string]{{Value: "", Label: i18n.T("settings.account.format.default")}}, formatOptions()...)
+			field := settingSelect(c, i18n.T("settings.compose.format"), &sel, opts)
+			if field.Changed() && sel != acc.ComposeFormat {
+				p.setAccountFormat(acc.ID, sel)
 			}
 			return field
 		})

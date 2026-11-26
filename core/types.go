@@ -70,6 +70,9 @@ type Account struct {
 	Kind                                    string // "" a mail account, KindLocalArchive
 	ReceiveOnly                             bool   // added without working SMTP: it syncs but never sends (ErrReceiveOnly)
 	Position                                int    // its place in the accounts list, shared with standalone address books (ReorderAccountEntries)
+	// ComposeFormat is the format its new drafts start in (Draft.Format):
+	// FormatHTML, FormatPlain, or "" for Settings.ComposeFormat.
+	ComposeFormat string
 	// Features is what its receiving server can do (协议能力), recorded at
 	// the add-account check, a server change and each sign-in (ADR 0034);
 	// nil before the first. See Unsupported.
@@ -153,6 +156,7 @@ type AccountPatch struct {
 	AIInstructions         *string // trimmed, at most MaxAIInstructions runes
 	LabelKeywords          *bool   // turning it on imports the server's keywords at once
 	ServerDrafts           *bool   // turning it on stores the account's drafts in its Drafts folder from its next sync
+	ComposeFormat          *string // Account.ComposeFormat: FormatHTML, FormatPlain or "" for the settings'
 }
 
 // AccountIcon is an account's uploaded icon image.

@@ -69,6 +69,7 @@ export const compose = (mode: "light" | "dark", withBody: boolean): ComposeState
   scheduledFor: 0,
   locale: "zh-Hans",
   fromProgram: false,
+  format: "html",
   wit: {
     enabled: true,
     translateOnly: false,

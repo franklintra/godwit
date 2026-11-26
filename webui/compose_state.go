@@ -49,13 +49,18 @@ type ComposeState struct {
 	Bcc     []string `json:"bcc"`
 	ReplyTo string   `json:"replyTo"`
 	Subject string   `json:"subject"`
-	// Body is the editable part as sanitized HTML.
+	// Body is the editable part as sanitized HTML; a plain draft's is its
+	// text's paragraphs (mail.PlainHTML), whatever wrote it.
 	Body string `json:"body"`
-	// Quote is read-only plain text. SignatureHTML is the signature as
-	// sanitized HTML, its images as data: URLs (core.SignatureShown), ""
-	// for none: the page shows it as is, read-only.
+	// Quote is read-only plain text: a plain draft's as it is sent, its
+	// lines after "> ". SignatureHTML is the signature as sanitized HTML, its
+	// images as data: URLs (core.SignatureShown), ""
+	// for none: the page shows it as is, read-only. A plain draft's is its
+	// text, escaped, for a white-space: pre-wrap block.
 	Quote         string `json:"quote"`
 	SignatureHTML string `json:"signatureHtml"`
+	// Format is core.Draft.Format: "plain" edits the body as text.
+	Format string `json:"format"`
 	// Attachments are the draft's files.
 	Attachments []Attachment `json:"attachments"`
 	// Headers are the draft's own header fields, shown read-only: the page

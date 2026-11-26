@@ -500,7 +500,7 @@ func b2i(b bool) int {
 const accountCols = `id, email, name, alias, COALESCE((SELECT html FROM signatures WHERE id = signature_id), ''), username, is_default, sync_limit, recv_auth, status,
 	recv_host, recv_port, recv_security, send_host, send_port, send_security, smtp_reauth, provider, status_detail,
 	sync_since_months, (SELECT count(*) FROM folders WHERE account_id = accounts.id), signature_id, icon, ai_instructions, oauth_client_id, label_keywords, kind, receive_only,
-	recv_protocol, send_protocol, features, recv_path, send_auth, position, server_drafts`
+	recv_protocol, send_protocol, features, recv_path, send_auth, position, server_drafts, compose_format`
 
 // ErrAccountNotFound is returned for an account id that does not exist.
 var ErrAccountNotFound = errors.New("account not found")
@@ -530,6 +530,7 @@ func scanAccount(r []any) Account {
 		Provider:  store.Str(r[17]), StatusDetail: store.Str(r[18]), SignatureID: store.Int(r[21]), Icon: store.Str(r[22]),
 		AIInstructions: store.Str(r[23]), OAuthClientID: store.Str(r[24]), LabelKeywords: store.Int(r[25]) == 1, Kind: store.Str(r[26]),
 		ReceiveOnly: store.Int(r[27]) == 1, Position: int(store.Int(r[33])), ServerDrafts: store.Int(r[34]) == 1,
+		ComposeFormat: store.Str(r[35]),
 	}
 	if sendsViaReceiving(a.Receiving.Protocol) {
 		// EWS, JMAP, Graph and Gmail API send through the receiving server, whose
@@ -885,6 +886,12 @@ func (s *Service) UpdateAccount(ctx context.Context, id int64, p AccountPatch) (
 	}
 	if p.ServerDrafts != nil {
 		set("server_drafts", b2i(*p.ServerDrafts))
+	}
+	if p.ComposeFormat != nil {
+		if *p.ComposeFormat != "" && !draftFormats[*p.ComposeFormat] {
+			return Account{}, fmt.Errorf("invalid compose format %q", *p.ComposeFormat)
+		}
+		set("compose_format", *p.ComposeFormat)
 	}
 	var iconStmts []sqlite.Statement
 	switch {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"mime"
 	"strings"
@@ -37,6 +38,10 @@ type Outgoing struct {
 	Draft bool
 	// OpenPGP, when set, signs or encrypts the message with PGP/MIME.
 	OpenPGP *OpenPGP
+	// Plain sends HTML (a draft body) as plain text only: one text/plain
+	// part, format=flowed (RFC 3676), as PlainBody and Flowed write it. No
+	// HTML part and no Related images go.
+	Plain bool
 }
 
 // RuleHeader marks mail a Godwit rule forwarded; mail carrying it is never
@@ -136,7 +141,9 @@ func Build(o Outgoing, now time.Time) (raw []byte, messageID string, err error) 
 		}
 	}
 
-	// The tree: [mixed: ] [related: ] alternative(text, html) [, images] [, attachments].
+	// The tree: [mixed: ] [related: ] alternative(text, html) [, images] [, attachments];
+	// plain: [mixed: ] text [, attachments].
+	top := "multipart/alternative"
 	body := func(w *message.Writer) error {
 		for _, p := range []struct{ ct, s string }{{"text/plain", HTMLToText(safe)}, {"text/html", safe}} {
 			var ph message.Header
@@ -148,6 +155,17 @@ func Build(o Outgoing, now time.Time) (raw []byte, messageID string, err error) 
 			}
 		}
 		return w.Close()
+	}
+	var plainText, plainCTE string
+	if o.Plain {
+		related = nil // no HTML shows them
+		plainText, plainCTE = plainPart(safe)
+		top = plainType
+		h.Set("Content-Transfer-Encoding", plainCTE)
+		body = func(w *message.Writer) error {
+			_, err := w.Write([]byte(plainText))
+			return errors.Join(err, w.Close())
+		}
 	}
 	if len(related) > 0 {
 		alt := body
@@ -168,15 +186,25 @@ func Build(o Outgoing, now time.Time) (raw []byte, messageID string, err error) 
 			return w.Close()
 		}
 	}
-	top := "multipart/alternative"
 	if len(related) > 0 {
 		top = `multipart/related; type="multipart/alternative"` // RFC 2387: the root's type
 	}
 	if len(o.Attachments) > 0 {
 		inner, innerType := body, top
 		top = "multipart/mixed"
+		first := func(w *message.Writer) error { return sub(w, innerType, inner) }
+		if o.Plain { // the text part itself
+			h.Del("Content-Transfer-Encoding")
+			first = func(w *message.Writer) error {
+				var ph message.Header
+				ph.Set("Content-Type", plainType)
+				ph.Set("Content-Disposition", "inline")
+				ph.Set("Content-Transfer-Encoding", plainCTE)
+				return leaf(w, ph, []byte(plainText))
+			}
+		}
 		body = func(w *message.Writer) error {
-			if err := sub(w, innerType, inner); err != nil {
+			if err := first(w); err != nil {
 				return err
 			}
 			for _, a := range o.Attachments {
@@ -213,6 +241,27 @@ func Build(o Outgoing, now time.Time) (raw []byte, messageID string, err error) 
 		return sealed, messageID, nil
 	}
 	return buf.Bytes(), messageID, nil
+}
+
+const plainType = "text/plain; charset=utf-8; format=flowed"
+
+// plainPart is the text/plain body of draft HTML safe and its transfer
+// encoding: 7bit when every line is short ASCII with no trailing space, else
+// quoted-printable, which keeps flowed's soft breaks (trailing spaces) safe
+// from servers that strip them and an OpenPGP signature over the part valid.
+func plainPart(safe string) (text, cte string) {
+	text = Flowed(PlainBody(safe), FlowedWidth)
+	for l := range strings.SplitSeq(strings.TrimSuffix(text, "\r\n"), "\r\n") {
+		if len(l) > 998 || strings.HasSuffix(l, " ") {
+			return text, "quoted-printable"
+		}
+		for i := 0; i < len(l); i++ {
+			if l[i] >= 0x80 || l[i] < 0x20 && l[i] != '\t' {
+				return text, "quoted-printable"
+			}
+		}
+	}
+	return text, "7bit"
 }
 
 // leaf writes a single part of w.

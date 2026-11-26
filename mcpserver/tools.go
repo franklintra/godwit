@@ -47,10 +47,10 @@ var tools = []tool{
 		draftArgs, getDraft},
 	{"find_message_by_message_id", "Find a message by its RFC 5322 Message-ID header (with or without the angle brackets), in every account: each match's message, thread, folder and account ID. The same message is listed once per account that has it.", true,
 		`{"type":"object","properties":{"rfc822_message_id":{"type":"string","minLength":1}},"required":["rfc822_message_id"],"additionalProperties":false}`, findByMessageID},
-	{"create_draft", "Create a draft for the user to review and send; it is not sent. For a reply give reply_to_message_id, or the replied message's Message-ID header as reply_to_rfc822_message_id (and reply_all to answer everyone): the draft is in that message's account, addressed and quoted for you, and to, cc and subject override only if given. A new draft needs to and subject and uses account_id or the default account. from picks the address the draft is sent as: the account's own or one of its identities from list_accounts (a name and address, or just the address); left out, a reply goes from the address the message was sent to and a new draft from the account's default. body is plain text. bcc adds blind-copy recipients and reply_to sets the address replies go to; request_read_receipt asks the recipients for a read receipt, sent back to the draft's From address. headers adds header fields the sent message carries (to tag it, so a reply can be matched to it later). The user sees all of these before sending. open: true also opens the draft in a Godwit compose window on the user's screen, for the user to review and send.", false,
-		`{"type":"object","properties":{"to":{"type":"array","items":{"type":"string"}},"cc":{"type":"array","items":{"type":"string"}},"subject":{"type":"string"},"body":{"type":"string"},"account_id":{"type":"integer","minimum":1},"from":{"type":"string","minLength":1},"reply_to_message_id":{"type":"integer","minimum":1},"reply_to_rfc822_message_id":{"type":"string","minLength":1},"reply_all":{"type":"boolean"},"open":{"type":"boolean"},` + extraArgs + `},"required":["body"],"additionalProperties":false}`, createDraft},
-	{"update_draft", "Change a draft's subject, to, cc, bcc, reply_to (\"\" removes it), request_read_receipt, plain-text body or headers (which replace all of its header fields; {} removes them); fields left out stay as they are, and the quote and signature are kept. revision is the draft's from get_draft: if the draft changed since, nothing is saved; read it again.", false,
-		`{"type":"object","properties":{"draft_id":{"type":"integer","minimum":1},"revision":{"type":"integer","minimum":1},"subject":{"type":"string"},"to":{"type":"array","items":{"type":"string"}},"cc":{"type":"array","items":{"type":"string"}},"body":{"type":"string"},` + extraArgs + `},"required":["draft_id","revision"],"additionalProperties":false}`, updateDraft},
+	{"create_draft", "Create a draft for the user to review and send; it is not sent. For a reply give reply_to_message_id, or the replied message's Message-ID header as reply_to_rfc822_message_id (and reply_all to answer everyone): the draft is in that message's account, addressed and quoted for you, and to, cc and subject override only if given. A new draft needs to and subject and uses account_id or the default account. from picks the address the draft is sent as: the account's own or one of its identities from list_accounts (a name and address, or just the address); left out, a reply goes from the address the message was sent to and a new draft from the account's default. body is plain text. bcc adds blind-copy recipients and reply_to sets the address replies go to; request_read_receipt asks the recipients for a read receipt, sent back to the draft's From address. headers adds header fields the sent message carries (to tag it, so a reply can be matched to it later). format is how it is sent: html (HTML with a text version) or plain (text only); left out, the user's default for the account. The user sees all of these before sending. open: true also opens the draft in a Godwit compose window on the user's screen, for the user to review and send.", false,
+		`{"type":"object","properties":{"to":{"type":"array","items":{"type":"string"}},"cc":{"type":"array","items":{"type":"string"}},"subject":{"type":"string"},"body":{"type":"string"},"account_id":{"type":"integer","minimum":1},"from":{"type":"string","minLength":1},"reply_to_message_id":{"type":"integer","minimum":1},"reply_to_rfc822_message_id":{"type":"string","minLength":1},"reply_all":{"type":"boolean"},"open":{"type":"boolean"},"format":` + formatArg + `,` + extraArgs + `},"required":["body"],"additionalProperties":false}`, createDraft},
+	{"update_draft", "Change a draft's subject, to, cc, bcc, reply_to (\"\" removes it), request_read_receipt, plain-text body, format (html or plain) or headers (which replace all of its header fields; {} removes them); fields left out stay as they are, and the quote and signature are kept. revision is the draft's from get_draft: if the draft changed since, nothing is saved; read it again.", false,
+		`{"type":"object","properties":{"draft_id":{"type":"integer","minimum":1},"revision":{"type":"integer","minimum":1},"subject":{"type":"string"},"to":{"type":"array","items":{"type":"string"}},"cc":{"type":"array","items":{"type":"string"}},"body":{"type":"string"},"format":` + formatArg + `,` + extraArgs + `},"required":["draft_id","revision"],"additionalProperties":false}`, updateDraft},
 	{"open_draft", "Open a draft in a Godwit compose window on the user's screen and bring Godwit to the front, for the user to review, edit and send it themselves. It sends nothing and returns nothing of the draft (use get_draft). Call it only when the user wants to see or finish the draft in Godwit.", false,
 		draftArgs, openDraft},
 	{"open_message", "Open a message in Godwit's main window on the user's screen (its conversation, in the folder it shows in) and bring Godwit to the front. It returns nothing of the message (use get_message). Call it only when the user wants to see the message in Godwit.", false,
@@ -71,6 +71,9 @@ var shows = []show{
 }
 
 const draftArgs = `{"type":"object","properties":{"draft_id":{"type":"integer","minimum":1}},"required":["draft_id"],"additionalProperties":false}`
+
+// formatArg is a draft's format (core.Draft.Format) as a tool argument.
+const formatArg = `{"type":"string","enum":["` + core.FormatHTML + `","` + core.FormatPlain + `"]}`
 
 func listAccounts(ctx context.Context, c *rpc.Client, _ json.RawMessage) (string, error) {
 	var accs []core.Account
@@ -478,11 +481,15 @@ type edit struct {
 	Subject     *string            `json:"subject"`
 	Body        *string            `json:"body"`
 	Headers     *map[string]string `json:"headers"`
+	Format      *string            `json:"format"`
 }
 
 // apply merges e into d. The body replaces the editable part only; the quote
-// and signature stay.
+// and signature stay. A plain draft keeps the body's text as it is.
 func (e edit) apply(d *core.Draft) {
+	if e.Format != nil {
+		d.Format = *e.Format
+	}
 	if e.To != nil {
 		d.To = *e.To
 	}
@@ -502,8 +509,12 @@ func (e edit) apply(d *core.Draft) {
 		d.Subject = *e.Subject
 	}
 	if e.Body != nil {
+		body := paragraphs(*e.Body)
+		if d.Format == core.FormatPlain {
+			body = mail.PlainHTML(*e.Body)
+		}
 		_, quote, sig := mail.SplitDraft(d.HTML)
-		d.HTML = mail.JoinDraft(paragraphs(*e.Body), quote, sig)
+		d.HTML = mail.JoinDraft(body, quote, sig)
 	}
 	if e.Headers != nil { // a JSON object has no order: by name
 		d.Headers = []mail.Header{} // not nil, which would keep the stored ones
@@ -880,7 +891,7 @@ func draft(b *strings.Builder, d core.Draft, full bool) {
 	if d.SourceMessageID != 0 {
 		fmt.Fprintf(b, " to message %d", d.SourceMessageID)
 	}
-	fmt.Fprintf(b, " · revision %d · saved %s\n", d.Revision, stamp(d.UpdatedAt))
+	fmt.Fprintf(b, " · %s · revision %d · saved %s\n", d.Format, d.Revision, stamp(d.UpdatedAt))
 	if d.From != "" { // the user's own account or identity
 		fmt.Fprintf(b, "from %s\n", d.From)
 	}
@@ -903,9 +914,13 @@ func draft(b *strings.Builder, d core.Draft, full bool) {
 		return
 	}
 	ed, quote, sig := mail.SplitDraft(d.HTML)
-	untrusted(b, id, "body", mail.HTMLToText(ed))
-	untrusted(b, id, "quote", mail.HTMLToText(quote))
-	untrusted(b, id, "signature", mail.HTMLToText(sig))
+	text := mail.HTMLToText
+	if d.Format == core.FormatPlain { // the text as it is sent
+		text = mail.PlainText
+	}
+	untrusted(b, id, "body", text(ed))
+	untrusted(b, id, "quote", text(quote))
+	untrusted(b, id, "signature", text(sig))
 	for _, at := range d.Attachments {
 		fmt.Fprintf(b, "attachment %d · %d bytes\n", at.ID, at.Size)
 		untrusted(b, id, "attachment_name", at.Filename)

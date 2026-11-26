@@ -348,7 +348,8 @@ func (s *Service) serverDraftRaw(ctx context.Context, d Draft, token string) ([]
 	from := cmp.Or(d.From, (&netmail.Address{Name: acc.Name, Address: acc.Email}).String())
 	o := mail.Outgoing{From: from, ReplyTo: d.ReplyTo,
 		To: d.To, Cc: d.Cc, Bcc: d.Bcc, Subject: d.Subject, HTML: d.HTML, Draft: true,
-		Headers: d.Headers, ReadReceipt: d.ReadReceipt, Header: map[string]string{DraftIDHeader: token}}
+		Headers: d.Headers, ReadReceipt: d.ReadReceipt, Plain: d.Format == FormatPlain,
+		Header: map[string]string{DraftIDHeader: token}}
 	for _, id := range mail.CIDs(d.HTML) {
 		if a, ok := imgs[id]; ok {
 			delete(imgs, id)

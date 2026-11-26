@@ -3,6 +3,8 @@ package webui
 import (
 	"context"
 	"errors"
+	"fmt"
+	"html"
 	"log"
 	netmail "net/mail"
 	"path/filepath"
@@ -261,7 +263,7 @@ func (p *ComposePage) Load(ctx context.Context) (ComposeState, error) {
 		return ComposeState{}, err
 	}
 	editable := s.adopt(d)
-	sig, err := svc.SignatureShown(ctx, s.signature)
+	sig, err := signatureOf(ctx, svc, d, s.signature)
 	if err != nil {
 		return ComposeState{}, err
 	}
@@ -270,13 +272,40 @@ func (p *ComposePage) Load(ctx context.Context) (ComposeState, error) {
 		return ComposeState{}, err
 	}
 	out := ComposeState{SignatureHTML: sig, Wit: wit, DraftID: d.ID, Accounts: accs, From: d.AccountID, Identity: d.IdentityID, To: nz(d.To), Cc: nz(d.Cc), Bcc: nz(d.Bcc),
-		ReplyTo: d.ReplyTo, Subject: d.Subject, Body: editable, Quote: mail.HTMLToText(s.quote),
-		Attachments: attachments(d), Headers: headers(d), ReadReceipt: d.ReadReceipt, Revision: d.Revision,
+		ReplyTo: d.ReplyTo, Subject: d.Subject, Body: pageBody(d, editable), Quote: quoteOf(d, s.quote),
+		Attachments: attachments(d), Headers: headers(d), ReadReceipt: d.ReadReceipt, Revision: d.Revision, Format: d.Format,
 		UpdatedAt: d.UpdatedAt.UnixMilli(), Theme: ThemeOf(st), Locale: i18n.Language(), FromProgram: d.FromProgram, OpenPGP: pgp}
 	if !d.ScheduledFor.IsZero() {
 		out.ScheduledFor = d.ScheduledFor.UnixMilli()
 	}
 	return out, nil
+}
+
+// pageBody is d's editable part as the page edits it: a plain draft's as its
+// text's paragraphs, even if a program wrote other HTML into it.
+func pageBody(d core.Draft, editable string) string {
+	if d.Format == core.FormatPlain {
+		return mail.PlainHTML(mail.PlainText(editable))
+	}
+	return editable
+}
+
+// quoteOf is d's quote block as the page shows it, read-only text: a plain
+// draft's as it is sent, quoted with ">".
+func quoteOf(d core.Draft, quote string) string {
+	if d.Format == core.FormatPlain {
+		return mail.PlainText(quote)
+	}
+	return mail.HTMLToText(quote)
+}
+
+// signatureOf is d's signature block as the page shows it: a plain draft's
+// as the text it is sent as, escaped (images have no place in it).
+func signatureOf(ctx context.Context, svc Service, d core.Draft, block string) (string, error) {
+	if d.Format == core.FormatPlain {
+		return html.EscapeString(mail.PlainText(block)), nil
+	}
+	return svc.SignatureShown(ctx, block)
 }
 
 // senders are the accounts a draft can be sent from, each with its
@@ -447,6 +476,30 @@ func openpgpOf(ctx context.Context, svc Service, d core.Draft) (OpenPGP, error) 
 		return OpenPGP{}, err
 	}
 	return OpenPGP{Available: a.Key != "", Sign: d.OpenPGP.Sign, Encrypt: d.OpenPGP.Encrypt}, nil
+}
+
+// SetFormat saves the calling window's draft in format, core.FormatHTML or
+// core.FormatPlain, its body turned into it (core.Draft.Format), if the
+// draft is at revision (else Conflict): the draft as stored after.
+func (p *ComposePage) SetFormat(ctx context.Context, format string, revision int64) (BodyChange, error) {
+	_, svc, s, err := p.open(ctx)
+	if err != nil {
+		return BodyChange{}, err
+	}
+	defer s.mu.Unlock()
+	if format != core.FormatHTML && format != core.FormatPlain {
+		return BodyChange{}, fmt.Errorf("unknown draft format %q", format)
+	}
+	d, err := svc.GetDraft(ctx, s.draftID)
+	if err != nil {
+		return BodyChange{}, err
+	}
+	if d.Revision != revision {
+		return BodyChange{Change: conflict}, nil
+	}
+	d.Format = format
+	_, err = svc.SaveDraft(ctx, d)
+	return bodyChange(ctx, svc, s, err)
 }
 
 // AddAttachments asks for files in a dialog on the calling window and adds
@@ -632,7 +685,7 @@ var conflict = Change{Conflict: true, Attachments: []Attachment{}}
 // changeOf is d's state after a change.
 func changeOf(ctx context.Context, svc Service, d core.Draft) (Change, error) {
 	_, _, sig := mail.SplitDraft(d.HTML)
-	shown, err := svc.SignatureShown(ctx, sig)
+	shown, err := signatureOf(ctx, svc, d, sig)
 	if err != nil {
 		return Change{}, err
 	}

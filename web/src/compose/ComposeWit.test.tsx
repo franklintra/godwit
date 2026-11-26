@@ -144,6 +144,7 @@ const state: ComposeState = {
   openpgp: { available: false, sign: false, encrypt: "off" },
   theme: { mode: "light", light: {}, dark: {}, fontSize: 14, bodyFontSize: 14 },
   locale: "zh-Hans",
+  format: "html",
   wit: { enabled: true, translateOnly: false, skills: [], languages: [], chips: [], model: "" },
 } as unknown as ComposeState;
 const empty: Legacy = {
@@ -257,6 +258,7 @@ const change = (body: string, revision: number): BodyChange => ({
   updatedAt: 0,
   openpgp: { available: false, sign: false, encrypt: "off" },
   fromProgram: true, // Wit's edit marks the draft (ADR 0043)
+  format: "html",
 });
 const ev = (e: Partial<WitEvent>): WitEvent => ({
   conversation: 1,

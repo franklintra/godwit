@@ -1,4 +1,4 @@
-import { RiArrowRightSLine, RiAttachment2, RiRefreshLine } from "@remixicon/react";
+import { RiArrowRightSLine, RiAttachment2, RiFileTextLine, RiRefreshLine } from "@remixicon/react";
 import { cn } from "cn";
 import { type RefObject, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
@@ -31,6 +31,7 @@ import { approvalsOf, WitTransport } from "@/wit/transport";
 import { Attachments } from "./Attachments";
 import { ProgramBanner, WitBanner } from "./Banner";
 import { type CmdKSelection, Editor, type EditorHandle } from "./editor/Editor";
+import { PlainEditor } from "./editor/PlainEditor";
 import { IdleToolbar } from "./editor/Toolbar";
 import { Fields, type FieldsEdit, type FieldsHandle } from "./fields/Fields";
 import { Headers } from "./Headers";
@@ -295,6 +296,9 @@ function Compose({
   const cur = useRef(editOf(state));
   const [f, setF] = useState(cur.current);
   const [initial, setInitial] = useState({ body: state.body, n: 0 }); // n remounts the editor
+  // The draft's format: "plain" edits the body as text (PlainEditor), anything else as HTML.
+  const [format, setFormat] = useState(state.format);
+  const formatRef = useRef(state.format);
   const [fieldsKey, setFieldsKey] = useState(0); // remounts the fields
   const [from, setFrom] = useState(state.from);
   const [identity, setIdentity] = useState(state.identity); // ADR 0048: 0 is the account's own address
@@ -418,8 +422,13 @@ function Compose({
     const recipients = (e: ComposeEdit) => JSON.stringify([e.to, e.cc, e.bcc, e.replyTo]);
     if (recipients(l) !== recipients(cur.current)) fieldsRef.current?.replaced();
     cur.current = editOf(l);
+    // Another format is another editor: remounted on the body, which it reads at mount.
+    const reformat = (l.format === "plain") !== (formatRef.current === "plain");
+    formatRef.current = l.format;
     flushSync(() => {
       setF(cur.current);
+      setFormat(l.format);
+      if (reformat) setInitial((i) => ({ body: l.body, n: i.n + 1 }));
       setAccounts(l.accounts); // the account may be one added since the window opened
       setFrom(l.from);
       setIdentity(l.identity);
@@ -432,7 +441,7 @@ function Compose({
       setReadReceipt(l.readReceipt);
       setSavedAt(fmt(new Date(l.updatedAt)));
     });
-    editorRef.current?.setValue(l.body);
+    if (!reformat) editorRef.current?.setValue(l.body);
     // biome-ignore lint/correctness/useHookAtTopLevel: the saver's method, not a hook
     saver.current?.useLatest(l.revision, cur.current);
   };
@@ -753,6 +762,19 @@ function Compose({
     setApplied(false);
     await bodyOp(() => api.undo());
   };
+  // Plain text or HTML: the draft is saved in the other format, its body turned into it (Go's
+  // core.Draft.Format), and adopted as stored.
+  const toggleFormat = async () => {
+    if (!sv || locked || witLocked) return;
+    const next = format === "plain" ? "html" : "plain";
+    setApplied(false);
+    try {
+      const r = await sv.run((rev) => api.setFormat(next, rev));
+      if (r && !r.conflict) take(r);
+    } catch (e) {
+      failure(e);
+    }
+  };
   const closeCmdK = useCallback(() => setCmdk(null), []);
   const openCmdK = (sel: CmdKSelection) => {
     setApplied(false); // ⌘K clears it, as a run or an edit does
@@ -830,8 +852,10 @@ function Compose({
         return;
       }
       cur.current = editOf(l);
+      formatRef.current = l.format;
       flushSync(() => {
         setF(cur.current);
+        setFormat(l.format);
         setInitial((i) => ({ body: l.body, n: i.n + 1 })); // remounts the editor
         setFieldsKey((k) => k + 1);
         setSavedAt(fmt(new Date(l.updatedAt)));
@@ -860,6 +884,25 @@ function Compose({
       <RiAttachment2 className="size-3.75" />
     </Button>
   );
+  const plain = format === "plain";
+  // The format switch, then attach: what every toolbar ends in.
+  const tools = (
+    <>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        className="size-7 rounded-md text-foreground/80 aria-pressed:bg-accent disabled:opacity-100"
+        aria-label={t("compose.format.plain")}
+        title={t("compose.format.plain")}
+        aria-pressed={plain}
+        disabled={locked || witLocked}
+        onClick={() => void toggleFormat()}
+      >
+        <RiFileTextLine className="size-3.75" />
+      </Button>
+      {attach}
+    </>
+  );
   const title = f.subject.trim() || t("compose.new");
   const statusText =
     status === "saved" ? t("compose.status.saved", savedAt) : t(`compose.status.${status}`);
@@ -873,7 +916,10 @@ function Compose({
       {signature && (
         <div
           data-slot="signature-preview"
-          className="text-xs text-muted-foreground [&_a]:underline [&_img]:max-w-full"
+          className={cn(
+            "text-xs text-muted-foreground [&_a]:underline [&_img]:max-w-full",
+            plain && "whitespace-pre-wrap font-mono", // the escaped text it is sent as
+          )}
           // biome-ignore lint/security/noDangerouslySetInnerHtml: Go sanitized it (SanitizeDraft) before inlining its images
           dangerouslySetInnerHTML={{ __html: signature }}
         />
@@ -892,7 +938,11 @@ function Compose({
             />
             {t("compose.quote.show")}
           </Button>
-          {showQuote && <div className="mt-2 whitespace-pre-wrap border-l-2 pl-3">{quote}</div>}
+          {showQuote && (
+            <div className={cn("mt-2 whitespace-pre-wrap border-l-2 pl-3", plain && "font-mono")}>
+              {quote}
+            </div>
+          )}
         </div>
       )}
     </>
@@ -1018,39 +1068,55 @@ function Compose({
                   onMouseDown={(e) => {
                     if (e.target !== e.currentTarget) return;
                     e.preventDefault();
-                    e.currentTarget.querySelector<HTMLElement>("[contenteditable=true]")?.focus();
+                    e.currentTarget
+                      .querySelector<HTMLElement>("[contenteditable=true], textarea")
+                      ?.focus();
                   }}
                 >
                   {writing && <Static html={streamed} label={t("compose.body")} caret />}
                   <div hidden={writing} className="contents">
-                    <Editor
-                      ref={editorRef}
-                      key={`${state.draftId}:${initial.n}`}
-                      initial={initial.body}
-                      readOnly={locked || witLocked || !showEditor}
-                      placeholder={wit && !state.wit.translateOnly ? t("wit.compose.empty") : ""}
-                      onChange={(body) => edit({ body })}
-                      onComposing={() => {}} // <main> tracks compositions, the fields' too
-                      t={t}
-                      onCmdK={
-                        wit && !locked && !witLocked && !state.wit.translateOnly
-                          ? openCmdK
-                          : undefined
-                      }
-                      toolbarSlot={showEditor ? toolbarSlot : null}
-                      attach={attach}
-                      popover={
-                        cmdk &&
-                        !locked &&
-                        !witLocked && (
-                          <CmdK
-                            onSubmit={(instruction) => void rewrite(cmdk, instruction)}
-                            onClose={closeCmdK}
-                            t={t}
-                          />
-                        )
-                      }
-                    />
+                    {plain ? (
+                      <PlainEditor
+                        ref={editorRef}
+                        key={`${state.draftId}:${initial.n}`}
+                        initial={initial.body}
+                        readOnly={locked || witLocked || !showEditor}
+                        placeholder={wit && !state.wit.translateOnly ? t("wit.compose.empty") : ""}
+                        onChange={(body) => edit({ body })}
+                        t={t}
+                        toolbarSlot={showEditor ? toolbarSlot : null}
+                        attach={tools}
+                      />
+                    ) : (
+                      <Editor
+                        ref={editorRef}
+                        key={`${state.draftId}:${initial.n}`}
+                        initial={initial.body}
+                        readOnly={locked || witLocked || !showEditor}
+                        placeholder={wit && !state.wit.translateOnly ? t("wit.compose.empty") : ""}
+                        onChange={(body) => edit({ body })}
+                        onComposing={() => {}} // <main> tracks compositions, the fields' too
+                        t={t}
+                        onCmdK={
+                          wit && !locked && !witLocked && !state.wit.translateOnly
+                            ? openCmdK
+                            : undefined
+                        }
+                        toolbarSlot={showEditor ? toolbarSlot : null}
+                        attach={tools}
+                        popover={
+                          cmdk &&
+                          !locked &&
+                          !witLocked && (
+                            <CmdK
+                              onSubmit={(instruction) => void rewrite(cmdk, instruction)}
+                              onClose={closeCmdK}
+                              t={t}
+                            />
+                          )
+                        }
+                      />
+                    )}
                   </div>
                   {!reviewing && tail /* the review shows it after its own text */}
                 </div>
@@ -1090,7 +1156,7 @@ function Compose({
               className="mx-4 flex shrink-0 flex-wrap items-center gap-2 py-3"
             >
               <div ref={setToolbarSlot} data-toolbar className="contents">
-                {!showEditor && <IdleToolbar t={t} attach={attach} />}
+                {!showEditor && <IdleToolbar t={t} attach={tools} />}
               </div>
               <OpenPGP
                 state={pgp}

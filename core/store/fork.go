@@ -116,6 +116,15 @@ var ForkMigrations = []ForkMigration{{
 		`ALTER TABLE drafts ADD COLUMN openpgp_sign INTEGER`,
 		`ALTER TABLE drafts ADD COLUMN openpgp_encrypt TEXT`,
 	},
+}, {
+	Name: "plaintext",
+	Stmts: []string{
+		// A draft's format: 'html' (multipart/alternative) or 'plain' (text/plain,
+		// format=flowed). An account's compose_format is what its new drafts
+		// start in: '' follows Settings.ComposeFormat.
+		`ALTER TABLE drafts ADD COLUMN format TEXT NOT NULL DEFAULT 'html'`,
+		`ALTER TABLE accounts ADD COLUMN compose_format TEXT NOT NULL DEFAULT ''`,
+	},
 }}
 
 // schemaObject is what an additive statement creates.

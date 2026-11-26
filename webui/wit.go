@@ -584,6 +584,8 @@ type BodyChange struct {
 	// FromProgram is core.Draft.FromProgram as stored: a Wit edit marks the
 	// draft, and the page shows the notice from then on (ADR 0043).
 	FromProgram bool `json:"fromProgram"`
+	// Format, Body, Quote and the signature are as in ComposeState.
+	Format string `json:"format"`
 }
 
 // RunStart is a run started: its conversation (made for a new one) and the
@@ -754,9 +756,9 @@ func bodyChange(ctx context.Context, svc Service, s *session, err error) (BodyCh
 	if err != nil {
 		return BodyChange{}, keyed(err)
 	}
-	body := s.adopt(d)
-	return BodyChange{Change: ch, Accounts: accs, From: d.AccountID, Identity: d.IdentityID, Quote: mail.HTMLToText(s.quote), To: nz(d.To), Cc: nz(d.Cc),
-		Bcc: nz(d.Bcc), ReplyTo: d.ReplyTo, Subject: d.Subject, Body: body, Headers: headers(d), ReadReceipt: d.ReadReceipt, FromProgram: d.FromProgram}, nil
+	body := pageBody(d, s.adopt(d))
+	return BodyChange{Change: ch, Accounts: accs, From: d.AccountID, Identity: d.IdentityID, Quote: quoteOf(d, s.quote), To: nz(d.To), Cc: nz(d.Cc),
+		Bcc: nz(d.Bcc), ReplyTo: d.ReplyTo, Subject: d.Subject, Body: body, Headers: headers(d), ReadReceipt: d.ReadReceipt, FromProgram: d.FromProgram, Format: d.Format}, nil
 }
 
 // Undo takes back the latest edit Wit applied to the calling window's

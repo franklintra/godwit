@@ -1,0 +1,34 @@
+[
+  {
+    "text": "",
+    "html": ""
+  },
+  {
+    "text": "one line",
+    "html": "<p>one line</p>"
+  },
+  {
+    "text": "a\nb & <c>",
+    "html": "<p>a<br>b &amp; &lt;c&gt;</p>"
+  },
+  {
+    "text": "Hi Bob,\n\nThanks.\n\n-- \nAlice",
+    "html": "<p>Hi Bob,</p><p>Thanks.</p><p>-- <br>Alice</p>"
+  },
+  {
+    "text": "a\n\n\nb",
+    "html": "<p>a<br><br></p><p>b</p>"
+  },
+  {
+    "text": "a\n\n\n\nb",
+    "html": "<p>a<br><br><br></p><p>b</p>"
+  },
+  {
+    "text": "  indented\ttab\n> typed quote",
+    "html": "<p>  indented\ttab<br>&gt; typed quote</p>"
+  },
+  {
+    "text": "it's \"quoted\"",
+    "html": "<p>it&#39;s &#34;quoted&#34;</p>"
+  }
+]
