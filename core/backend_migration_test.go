@@ -70,6 +70,8 @@ var toPreBackendSchema = []string{
 	`ALTER TABLE archive_marks DROP COLUMN archived_at`,
 	`ALTER TABLE archive_marks DROP COLUMN archived_version`,
 	`DROP TABLE summary_checks`,
+	`ALTER TABLE drafts DROP COLUMN format`,
+	`ALTER TABLE accounts DROP COLUMN compose_format`,
 	fmt.Sprintf("PRAGMA user_version = %d", slices.IndexFunc(store.Migrations, func(m []string) bool {
 		return strings.Contains(strings.Join(m, "\n"), "ADD COLUMN server_ref")
 	})),
