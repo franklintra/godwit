@@ -19,9 +19,10 @@ const (
 // SetThreadDeadline sets or clears one conversation's 期限 on this device
 // only, as the program source: it sends nothing, changes no mail, and cannot
 // replace or clear one the user set (core checks the message it cites).
+// FindMessagesByMessageID is a read of stored data.
 var mcpMethods = map[string]bool{
 	"ListAccounts": true, "ListFolders": true, "ListThreads": true, "GetThread": true,
-	"ListMessages": true, "GetMessageText": true, "Search": true, "SearchContacts": true,
+	"ListMessages": true, "GetMessageText": true, "Search": true, "SearchContacts": true, "FindMessagesByMessageID": true,
 	"ListDrafts": true, "GetDraft": true, "NewDraft": true, "SaveDraft": true,
 	"SavedViews": true, "ViewContents": true, "ViewGroupPage": true,
 	"RequestMCPSend": true, "SetThreadDeadline": true,

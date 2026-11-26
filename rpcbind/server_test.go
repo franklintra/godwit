@@ -72,7 +72,7 @@ func cacheFiles(dataDir string) int {
 
 // The mcp role's whole surface, compared with every method of *core.Service.
 func TestMCPAllowlistContents(t *testing.T) {
-	want := []string{"GetDraft", "GetMessageText", "GetThread", "ListAccounts", "ListDrafts", "ListFolders",
+	want := []string{"FindMessagesByMessageID", "GetDraft", "GetMessageText", "GetThread", "ListAccounts", "ListDrafts", "ListFolders",
 		"ListMessages", "ListThreads", "NewDraft", "RequestMCPSend", "SaveDraft", "SavedViews", "Search", "SearchContacts",
 		"SetThreadDeadline", "ViewContents", "ViewGroupPage"}
 	newMode := []json.RawMessage{json.RawMessage(`1`), json.RawMessage(`"new"`), json.RawMessage(`0`)}

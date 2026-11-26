@@ -83,7 +83,7 @@ func cacheFiles(dataDir string) int {
 	return n
 }
 
-var allTools = []string{"create_draft", "get_draft", "get_message", "get_thread", "list_accounts", "list_drafts",
+var allTools = []string{"create_draft", "find_message_by_message_id", "get_draft", "get_message", "get_thread", "list_accounts", "list_drafts",
 	"list_folders", "list_threads", "list_view_threads", "list_views", "search", "search_contacts", "send_draft", "set_reply_deadline", "show_draft", "show_mail", "update_draft"}
 
 func TestMCPListTools(t *testing.T) {
@@ -104,7 +104,7 @@ func TestMCPListTools(t *testing.T) {
 	}
 	assert.Equal(t, map[string]bool{"list_accounts": true, "list_folders": true, "list_threads": true, "get_thread": true,
 		"get_message": true, "list_views": true, "list_view_threads": true, "search": true, "search_contacts": true, "list_drafts": true, "get_draft": true, "show_draft": true, "show_mail": true,
-		"create_draft": false, "update_draft": false, "send_draft": false, "set_reply_deadline": false}, readOnly)
+		"find_message_by_message_id": true, "create_draft": false, "update_draft": false, "send_draft": false, "set_reply_deadline": false}, readOnly)
 	assert.Contains(t, cs.InitializeResult().Instructions, "untrusted_email")
 	assert.NotContains(t, cs.InitializeResult().Instructions, "cannot send")
 	assert.Contains(t, cs.InitializeResult().Instructions, "Send through MCP")
@@ -697,4 +697,56 @@ func TestMCPSearchContacts(t *testing.T) {
 
 	none := ok(t, cs, "search_contacts", map[string]any{"query": "nobody-matches-this"})
 	assert.Equal(t, "no contacts found", none)
+}
+
+// find_message_by_message_id finds a message by its Message-ID header, with
+// or without the brackets, in every account that has it; create_draft
+// replies by it, from the one account or the account_id given.
+func TestMCPMessageIDLookupAndReply(t *testing.T) {
+	e := coretest.New(t, coretest.WithoutAutoSync())
+	ctx := t.Context()
+	alice := e.AddAccount(t, "alice@example.com")
+	carol := e.AddAccount(t, "carol@example.com")
+	e.Deliver(t, alice.ID, "INBOX", coretest.Msg("bob@example.com", "alice@example.com", "Lunch", "Lunch on Tuesday?", coretest.MessageID("lunch-1@example.com")))
+	e.Deliver(t, alice.ID, "INBOX", coretest.Msg("bob@example.com", "alice@example.com, carol@example.com", "Plans", "Friday?", coretest.MessageID("plans-1@example.com")))
+	e.Deliver(t, carol.ID, "INBOX", coretest.Msg("bob@example.com", "alice@example.com, carol@example.com", "Plans", "Friday?", coretest.MessageID("plans-1@example.com")))
+	cs, _ := bridge(t, e)
+
+	got := ok(t, cs, "find_message_by_message_id", map[string]any{"rfc822_message_id": "<lunch-1@example.com>"})
+	refs, err := e.Svc.FindMessagesByMessageID(ctx, "lunch-1@example.com")
+	require.NoError(t, err)
+	require.Len(t, refs, 1)
+	assert.Contains(t, got, fmt.Sprintf("account %d\nmessage %d · thread %d · folder %d", alice.ID, refs[0].ID, refs[0].ThreadID, refs[0].FolderID))
+	got = ok(t, cs, "find_message_by_message_id", map[string]any{"rfc822_message_id": "plans-1@example.com"})
+	assert.Contains(t, got, fmt.Sprintf("account %d\n", alice.ID))
+	assert.Contains(t, got, fmt.Sprintf("account %d\n", carol.ID))
+	assert.Equal(t, "no message with that Message-ID", ok(t, cs, "find_message_by_message_id", map[string]any{"rfc822_message_id": "<nope@example.com>"}))
+
+	ok(t, cs, "create_draft", map[string]any{"reply_to_rfc822_message_id": "<lunch-1@example.com>", "body": "Yes"})
+	ds, err := e.Svc.ListDrafts(ctx, alice.ID)
+	require.NoError(t, err)
+	require.Len(t, ds, 1)
+	assert.Equal(t, refs[0].ID, ds[0].SourceMessageID)
+	assert.Equal(t, "reply", ds[0].Mode)
+
+	text, isErr := call(t, cs, "create_draft", map[string]any{"reply_to_rfc822_message_id": "plans-1@example.com", "body": "x"})
+	assert.True(t, isErr, text)
+	assert.Contains(t, text, "account_id", "in two accounts: say which")
+	ok(t, cs, "create_draft", map[string]any{"reply_to_rfc822_message_id": "plans-1@example.com", "account_id": carol.ID, "reply_all": true, "body": "x"})
+	ds, err = e.Svc.ListDrafts(ctx, carol.ID)
+	require.NoError(t, err)
+	require.Len(t, ds, 1)
+	assert.Equal(t, "reply_all", ds[0].Mode)
+
+	for _, args := range []map[string]any{
+		{"reply_to_rfc822_message_id": "nope@example.com", "body": "x"},
+		{"reply_to_rfc822_message_id": "lunch-1@example.com", "account_id": carol.ID, "body": "x"},
+		{"reply_to_rfc822_message_id": "lunch-1@example.com", "reply_to_message_id": refs[0].ID, "body": "x"},
+	} {
+		text, isErr := call(t, cs, "create_draft", args)
+		assert.True(t, isErr, "%v: %s", args, text)
+	}
+	ds, err = e.Svc.ListDrafts(ctx, alice.ID)
+	require.NoError(t, err)
+	assert.Len(t, ds, 1, "a failed reply leaves no draft")
 }
