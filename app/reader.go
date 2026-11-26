@@ -799,6 +799,31 @@ func (a *App) draft(m core.MessageSummary, acc int64, mode string) {
 	})
 }
 
+// inServerDrafts reports whether m is in a Drafts folder on its server: a
+// draft another app saved, which 编辑草稿 makes a Godwit draft (ADR 0045).
+func (r *reader) inServerDrafts(m core.MessageSummary) bool {
+	return slices.ContainsFunc(m.FolderIDs, func(id int64) bool {
+		f, ok := r.p.folder(id)
+		return ok && f.Role == "drafts"
+	})
+}
+
+// openServerDraft makes message id, another app's draft, a Godwit draft and
+// opens it in a compose window; the message then leaves the lists.
+func (a *App) openServerDraft(id int64) {
+	var draftID int64
+	a.do(func(ctx context.Context) (err error) {
+		draftID, err = a.svc.OpenServerDraft(ctx, id)
+		return err
+	}, func(err error) {
+		if err != nil {
+			a.toastErr(err)
+			return
+		}
+		a.OpenDraft(draftID)
+	})
+}
+
 // cspHead keeps a page from loading anything remote or running scripts.
 const cspHead = `<!doctype html><html><head><meta charset="utf-8">` +
 	`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'">`
@@ -2217,6 +2242,10 @@ func (r *reader) message(c *ui.Context, m core.MessageSummary) {
 					})
 				})
 				ui.Spacer(c)
+				if r.inServerDrafts(m) {
+					kit.Button(c, i18n.T("reader.edit_draft"), kit.ButtonOpts{Variant: kit.Outline, Size: kit.SizeSm, Icon: "square-pen"}).
+						Shrink(0).AlignSelf(ui.Start).OnClick(func() { r.p.a.openServerDraft(m.ID) })
+				}
 				// on the name's line: its middle, a smaller text's and the chevron's
 				kit.Text(c, senderDate(r.p.a.clock.Now(), m.Date), t.Text.Xs).TextColor(t.Muted).Shrink(0).AlignSelf(ui.Start).Margin(th.Space(1.5), 0, 0, 0)
 				if len(r.msgs) > 1 { // only a thread of more than one message folds
