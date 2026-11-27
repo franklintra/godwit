@@ -752,14 +752,17 @@ func TestSettingsSavedFieldSurvivesStaleLoad(t *testing.T) {
 	h, acc := withAccount(t)
 	p := h.openSettings(accountRoute(acc.ID))
 	stale := slices.Clone(h.app.accounts)
-	release := make(chan struct{})
+	release, releaseAgain := make(chan struct{}), make(chan struct{})
 	var calls atomic.Int32
 	fetch := h.app.fetch
 	h.app.fetch = func(ctx context.Context) (core.Settings, []core.Account, error) {
 		st, accs, err := fetch(ctx)
-		if calls.Add(1) == 1 { // read before the save: hand back the old accounts
+		switch calls.Add(1) {
+		case 1: // read before the save: hand back the old accounts
 			<-release
 			return st, stale, err
+		case 2: // the reload the save asked for: held so the stale load is seen alone
+			<-releaseAgain
 		}
 		return st, accs, err
 	}
@@ -772,13 +775,20 @@ func TestSettingsSavedFieldSurvivesStaleLoad(t *testing.T) {
 	if h.app.accounts[0].Name != "Alice Liddell" {
 		t.Fatalf("the saved account was not merged: %+v", h.app.accounts[0])
 	}
-	h.until("the reload after the save", func() bool { return h.app.accountsGen > staleGen })
-	h.app.loads.seq = staleGen // let the stale load apply, as if it were the newest
+	// Loads are single-flight: the save's reload waits for the stale load,
+	// which lands after the save with the old accounts.
 	close(release)
 	h.until("the stale load applies", func() bool { return h.app.accountsGen == staleGen && h.app.accounts[0].Name == "alice" })
 	h.tt.Frame()
 	if f := p.forms[acc.ID]; f.name != "Alice Liddell" {
 		t.Fatalf("a stale load reverted the field to %q", f.name)
+	}
+	h.until("the reload after the save runs", func() bool { return calls.Load() == 2 })
+	close(releaseAgain)
+	h.until("the reload after the save applies", func() bool { return h.app.accountsGen > staleGen })
+	h.tt.Frame()
+	if f := p.forms[acc.ID]; f.name != "Alice Liddell" || h.app.accounts[0].Name != "Alice Liddell" {
+		t.Fatalf("after the reload: field %q, account %+v", f.name, h.app.accounts[0])
 	}
 }
 
