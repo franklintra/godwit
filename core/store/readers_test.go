@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -128,7 +129,7 @@ func TestAcquireLanes(t *testing.T) {
 	ctx := t.Context()
 	take := func(c readClass) *reader {
 		t.Helper()
-		r, err := acquire(ctx, p, c)
+		r, err := acquire(ctx, p, c, nil)
 		require.NoError(t, err)
 		return r
 	}
@@ -137,7 +138,7 @@ func TestAcquireLanes(t *testing.T) {
 		t.Helper()
 		short, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
 		defer cancel()
-		_, err := acquire(short, p, c)
+		_, err := acquire(short, p, c, nil)
 		assert.ErrorIs(t, err, context.DeadlineExceeded)
 	}
 
@@ -163,7 +164,7 @@ func TestAcquireLanes(t *testing.T) {
 
 	got := make(chan *reader)
 	go func() {
-		r, _ := acquire(ctx, p, quickRead)
+		r, _ := acquire(ctx, p, quickRead, nil)
 		got <- r
 	}()
 	select {
@@ -187,7 +188,7 @@ func TestAcquireLanes(t *testing.T) {
 	l = take(longRead)
 	queued := make(chan *reader)
 	go func() {
-		r, _ := acquire(ctx, p, longRead)
+		r, _ := acquire(ctx, p, longRead, nil)
 		queued <- r
 	}()
 	time.Sleep(20 * time.Millisecond) // a long read queues for the long lane
@@ -352,4 +353,83 @@ func TestUIReadLasts(t *testing.T) {
 	end()
 	assert.False(t, isUIRead(detached), "the connection ended")
 	assert.False(t, isUIRead(ui))
+}
+
+// Past the WAL limit, with a reader holding a snapshot, the backend's
+// writes wait while the readers drain; the interface still reads (on the
+// writer, a read already waiting for a lane included) and writes; once the reader's statement ends, the WAL is
+// truncated and the writes resume.
+func TestWALDrainPausesBackgroundWrites(t *testing.T) {
+	db := openReadersDB(t)
+	p := pool(t, db)
+	db.rd.wal.limit = 1 // any WAL at all
+	_, err := db.Execute(t.Context(), "INSERT INTO t(x) VALUES (1)")
+	require.NoError(t, err, "a write made while no reader runs")
+
+	ui := WithUIRead(t.Context())
+	long, cancel := context.WithCancel(WithLongRead(ui))
+	held := make(chan error, 1)
+	go func() {
+		_, err := db.Query(long, endless)
+		held <- err
+	}()
+	require.Eventually(t, func() bool { return len(p[1].lane) == 0 }, 5*time.Second, time.Millisecond)
+	queued := make(chan error, 1)
+	go func() {
+		_, err := db.Query(WithLongRead(ui), "SELECT count(*) FROM t")
+		queued <- err
+	}()
+	time.Sleep(20 * time.Millisecond) // it waits for the long lane
+
+	wrote := make(chan error, 1)
+	go func() {
+		db.rd.wal.mu.Lock()
+		db.rd.wal.next = time.Time{}
+		db.rd.wal.mu.Unlock()
+		_, err := db.Execute(context.Background(), "INSERT INTO t(x) VALUES (2)")
+		wrote <- err
+	}()
+	require.Eventually(t, db.rd.wal.draining.Load, 5*time.Second, time.Millisecond)
+	select {
+	case err := <-queued:
+		require.NoError(t, err, "a read waiting for a lane when the drain starts reads on the writer")
+	case <-time.After(2 * time.Second):
+		t.Fatal("a read waiting for a lane still waits for it during the drain")
+	}
+	select {
+	case <-wrote:
+		t.Fatal("a background write did not wait for the drain")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	quick, stop := context.WithTimeout(ui, 2*time.Second)
+	defer stop()
+	rows, err := db.Query(quick, "SELECT count(*) FROM t")
+	require.NoError(t, err, "an interface read takes the writer during a drain")
+	assert.EqualValues(t, 1, Int(rows.Values[0][0]))
+	_, err = db.Execute(quick, "INSERT INTO t(x) VALUES (3)")
+	require.NoError(t, err, "the interface's writes do not wait")
+
+	cancel()
+	assert.ErrorIs(t, <-held, context.Canceled)
+	select {
+	case err := <-wrote:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the background write still waits after the readers emptied")
+	}
+	assert.False(t, db.rd.wal.draining.Load())
+	assert.Len(t, p[0].lane, 1)
+	assert.Len(t, p[1].lane, 1, "the drain gave the lanes back")
+	assert.Less(t, fileSize(t, db.rd.path+"-wal"), int64(64<<10), "the WAL was truncated before the write")
+	rows, err = db.Query(ui, "SELECT count(*) FROM t")
+	require.NoError(t, err)
+	assert.EqualValues(t, 3, Int(rows.Values[0][0]))
+}
+
+func fileSize(t *testing.T, path string) int64 {
+	t.Helper()
+	fi, err := os.Stat(path)
+	require.NoError(t, err)
+	return fi.Size()
 }

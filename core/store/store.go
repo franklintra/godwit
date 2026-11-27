@@ -51,6 +51,10 @@ func Open(ctx context.Context, path string) (*DB, error) {
 	// After init: the schema no longer changes and the WAL exists, which a
 	// read-only connection needs to open.
 	db.rd = &readers{path: path}
+	db.rd.wal.checkpoint = func(ctx context.Context) error {
+		_, err := db.Query(ctx, "PRAGMA wal_checkpoint(TRUNCATE)")
+		return err
+	}
 	return db, nil
 }
 
@@ -68,8 +72,10 @@ func (db *DB) Close() error {
 // a read-only connection; anything else on the writer.
 func (db *DB) Query(ctx context.Context, sql string, args ...any) (sqlite.Rows, error) {
 	if db.rd != nil && isUIRead(ctx) && readOnlySQL(sql) {
-		if pool := db.rd.get(); pool != nil {
-			return db.rd.read(ctx, pool, sql, args)
+		if pool := db.rd.get(); pool != nil && !db.rd.wal.draining.Load() {
+			if rows, err := db.rd.read(ctx, pool, sql, args); err != errDraining {
+				return rows, err
+			}
 		}
 	}
 	if !perftrace.SQLOn() {
@@ -81,8 +87,12 @@ func (db *DB) Query(ctx context.Context, sql string, args ...any) (sqlite.Rows, 
 	return r, err
 }
 
-// Execute is sqlite.DB's, timed as Query is.
+// Execute is sqlite.DB's, timed as Query is. While the readers hold the
+// WAL past walLimit, the backend's writes wait (readers_wal.go).
 func (db *DB) Execute(ctx context.Context, sql string, args ...any) (sqlite.Result, error) {
+	if db.rd != nil {
+		db.rd.beforeWrite(ctx)
+	}
 	if !perftrace.SQLOn() {
 		return db.DB.Execute(ctx, sql, args...)
 	}
@@ -92,8 +102,12 @@ func (db *DB) Execute(ctx context.Context, sql string, args ...any) (sqlite.Resu
 	return r, err
 }
 
-// Transaction is sqlite.DB's, timed as Query is (by its first statement).
+// Transaction is sqlite.DB's, timed as Query is (by its first statement),
+// and waits as Execute does.
 func (db *DB) Transaction(ctx context.Context, stmts []sqlite.Statement) ([]sqlite.Result, error) {
+	if db.rd != nil {
+		db.rd.beforeWrite(ctx)
+	}
 	if !perftrace.SQLOn() {
 		return db.DB.Transaction(ctx, stmts)
 	}

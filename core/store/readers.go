@@ -146,6 +146,8 @@ type readers struct {
 
 	timeMu sync.Mutex
 	timed  map[string]bool // statement text: its last run took slowRead or more
+
+	wal walGuard // readers_wal.go
 }
 
 // readClass is what acquire knows of an interface read.
@@ -268,12 +270,18 @@ func (rs *readers) close() error {
 // the lanes swapped: it prefers the long lane so that the quick one stays
 // free for the next thread, but it never queues behind the long lane's
 // scans, which arrive faster than they drain during a sync.
-func acquire(ctx context.Context, pool []*reader, c readClass) (*reader, error) {
+//
+// A wait ends with errDraining when drain is closed: a WAL drain has
+// started (readers_wal.go), and the caller reads on the writer instead of
+// waiting for the statements the drain waits for.
+func acquire(ctx context.Context, pool []*reader, c readClass, drain <-chan struct{}) (*reader, error) {
 	quick, long := pool[0], pool[1]
 	if c == longRead {
 		select {
 		case <-long.lane:
 			return long, nil
+		case <-drain:
+			return nil, errDraining
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
@@ -294,6 +302,8 @@ func acquire(ctx context.Context, pool []*reader, c readClass) (*reader, error) 
 		return quick, nil
 	case <-long.lane:
 		return long, nil
+	case <-drain:
+		return nil, errDraining
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -304,12 +314,18 @@ func acquire(ctx context.Context, pool []*reader, c readClass) (*reader, error) 
 var _ = [1]struct{}{}[readerCount-2]
 
 // read runs sql on a reader, timed for the SQL trace by the reader that
-// ran it (its wait for a lane included).
+// ran it (its wait for a lane included). It returns errDraining, having
+// run nothing, when a WAL drain starts before it has a lane: the caller
+// reads on the writer.
 func (rs *readers) read(ctx context.Context, pool []*reader, sql string, args []any) (sqlite.Rows, error) {
 	t := time.Now()
-	r, err := acquire(ctx, pool, rs.class(ctx, sql))
+	r, err := acquire(ctx, pool, rs.class(ctx, sql), rs.wal.started())
 	if err != nil {
 		return sqlite.Rows{}, err
+	}
+	if rs.wal.draining.Load() {
+		r.lane <- struct{}{}
+		return sqlite.Rows{}, errDraining
 	}
 	run := time.Now()
 	rows, err := r.db.Query(ctx, sql, args...)
