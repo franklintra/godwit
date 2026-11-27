@@ -5,7 +5,7 @@ name: Fork macOS build
 
 on:
   push:
-    branches: [franklin/integration]
+    branches: [franklin/integration, 'build/**']
   workflow_dispatch:
 
 permissions:
