@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -123,6 +124,33 @@ func TestCountsEveryDuringLongBurst(t *testing.T) {
 	}
 	if got.list < 60 {
 		t.Fatalf("%d list reads for 60 refreshes", got.list)
+	}
+}
+
+// Mail written here (a mark read) reads the counts at once, in a burst too.
+func TestCountsAtOnceAfterMailWrite(t *testing.T) {
+	h, svc, acc := countsHarness(t)
+	ids := inboxIDs(t, h, acc)
+	mailEvent(h, acc.ID) // a sync's: the counts wait
+	if !h.app.countsOwed {
+		t.Fatal("the counts did not wait")
+	}
+	before, start := svc.reads(), h.app.clock.Now()
+	landed := false
+	h.app.writes.Chain(fmt.Sprintf("account:%d", acc.ID), func(ctx context.Context) error {
+		return h.app.svc.SetFlags(ctx, ids, []string{`\Seen`}, nil)
+	}, func(error) { landed = true })
+	h.until("the write", func() bool { return landed })
+	h.waitMail("the refresh read", func() bool { return idle(h) && svc.reads().since(before).saved > 0 })
+	if h.app.countsAt.Sub(start) > time.Second {
+		t.Fatalf("the counts were read %v after the write", h.app.countsAt.Sub(start))
+	}
+	got := svc.reads().since(before)
+	if got.accounts < 1 || got.starred < 1 || got.saved < 1 {
+		t.Fatalf("the write's refresh read %+v, want the counts", got)
+	}
+	if h.app.unread[acc.ID] != 0 || h.app.countsOwed {
+		t.Fatalf("unread %v, owed %v", h.app.unread, h.app.countsOwed)
 	}
 }
 

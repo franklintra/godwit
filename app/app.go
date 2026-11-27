@@ -287,7 +287,7 @@ type App struct {
 	countsAt    time.Time // when the last refresh that read them ran; zero before one
 	countsOwed  bool      // a refresh since then left them as they were: countsTimer reads them
 	countsTimer func()    // stops the trailing refresh that reads them; nil when none
-	countsNow   bool      // the next refresh reads them, at once
+	countsNow   bool      // mail written here landed: the next refresh reads them, at once
 
 	syncBatch  *syncBatch          // the Sync All in flight; nil when none
 	syncing    map[int64]bool      // accounts syncing now

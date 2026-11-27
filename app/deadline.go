@@ -359,6 +359,7 @@ func (a *App) setReplyDate(threadID int64, d core.Deadline) {
 		before, err = a.svc.SetThreadDeadline(ctx, threadID, d)
 		return err
 	}, func(err error) {
+		a.mailWritten()
 		if err != nil {
 			a.toastErr(err)
 			return
@@ -371,6 +372,7 @@ func (a *App) setReplyDate(threadID int64, d core.Deadline) {
 		a.toasts = append(a.toasts, ui.Toast{ID: fmt.Sprintf("reply-date-%d", now.UnixNano()), Title: title, Action: i18n.T("compose.undo"),
 			Timeout: viewUndoWindow, Data: kit.ToastData{Deadline: now.Add(viewUndoWindow)}, OnAction: func() {
 				a.do(func(ctx context.Context) error { return a.svc.UndoSetThreadDeadline(ctx, before) }, func(err error) {
+					a.mailWritten()
 					if err != nil {
 						a.toastErr(err)
 					}

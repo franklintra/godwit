@@ -279,6 +279,14 @@ func (a *App) trailCounts() {
 	})
 }
 
+// mailWritten follows a write of mail made here (mark read, move, delete,
+// archive): the counts are read at the next refresh, which comes at once,
+// whether or not the write's own event has refreshed already.
+func (a *App) mailWritten() {
+	a.countsNow = true
+	a.refreshSoon()
+}
+
 // tick redraws once a minute, so the sync age stays current.
 func (a *App) tick() {
 	if a.ticking {

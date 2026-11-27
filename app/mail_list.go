@@ -2348,6 +2348,7 @@ func (p *mailPage) undoPurge(ids []int64) {
 		gone, err = a.svc.UndoPurge(ctx, ids)
 		return err
 	}, func(err error) {
+		a.mailWritten()
 		switch {
 		case errors.Is(err, core.ErrPurgeTooLate):
 			a.toastAs(kit.ToastWarning, i18n.T("mail.purge.too_late"))
