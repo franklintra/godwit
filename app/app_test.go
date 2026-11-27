@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -145,26 +146,40 @@ func TestLoadError(t *testing.T) {
 	}
 }
 
-func TestLoadNewestWins(t *testing.T) {
+// A load asked for while one reads waits for it, then runs once, however
+// many were asked: the newest settings apply last, and only one load reads
+// at a time.
+func TestLoadSingleFlight(t *testing.T) {
 	h := startedIdle(t)
+	var inFlight, most atomic.Int32
 	gate := func(theme string, release chan struct{}) func(context.Context) (core.Settings, []core.Account, error) {
 		return func(context.Context) (core.Settings, []core.Account, error) {
+			n := inFlight.Add(1)
+			defer inFlight.Add(-1)
+			for m := most.Load(); n > m && !most.CompareAndSwap(m, n); m = most.Load() {
+			}
 			<-release
 			return core.Settings{Theme: theme}, nil, nil
 		}
 	}
+	h.until("no load in flight", func() bool { return !h.app.loads.loading })
 	first, second := make(chan struct{}), make(chan struct{})
+	reads := h.app.loads.Gen()
 	h.app.fetch = gate("light", first)
 	h.app.load()
 	h.app.fetch = gate("dark", second)
-	h.app.load()
-	close(second)
-	h.until("the newer load applied", func() bool { return h.app.settings.Theme == "dark" })
+	for range 5 {
+		h.app.load()
+	}
+	if got := h.app.loads.Gen() - reads; got != 1 || !h.app.loadAgain {
+		t.Fatalf("%d loads started while one read, again %v", got, h.app.loadAgain)
+	}
 	close(first)
-	h.queued("the older load's result", 1)
-	h.drain()
-	if h.app.settings.Theme != "dark" {
-		t.Fatalf("an older load rolled settings back to %q", h.app.settings.Theme)
+	h.until("the first load applied", func() bool { return h.app.settings.Theme == "light" })
+	close(second)
+	h.until("the queued load applied", func() bool { return h.app.settings.Theme == "dark" && !h.app.loads.loading })
+	if got := h.app.loads.Gen() - reads; got != 2 || most.Load() != 1 {
+		t.Fatalf("%d loads for six asked, %d at once", got, most.Load())
 	}
 }
 
