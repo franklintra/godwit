@@ -13,6 +13,7 @@ import (
 	"log"
 	"maps"
 	"math/rand/v2"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -361,7 +362,7 @@ func runWindow(ctx context.Context, o *opener, mail *loopMail, meta fixtureMeta,
 		}
 		roundSpans = append(roundSpans, roundSpan{from, time.Now()})
 		done++
-		log.Printf("%s: round %d done in %s (%d stored)", prefix, r+1, time.Since(from).Round(time.Millisecond), stored())
+		log.Printf("%s: round %d done in %s (%d stored, WAL %.0f MB)", prefix, r+1, time.Since(from).Round(time.Millisecond), stored(), float64(fileSize(filepath.Join(o.data, "godwit.db-wal")))/1e6)
 		time.Sleep(time.Second)
 	}
 	end()
