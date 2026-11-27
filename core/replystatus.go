@@ -148,7 +148,14 @@ func (s *Service) mailPeople(ctx context.Context, roles map[int64]string) (mailP
 			sent = append(sent, id)
 		}
 	}
-	rows, err := s.db.Query(ctx, "SELECT from_addr, to_addrs, cc_addrs FROM messages m WHERE "+shownIn("(SELECT value FROM json_each(?))")+" ORDER BY date DESC LIMIT ?", intList(sent), sentMailRead)
+	// The newest sent messages, found from their Sent locations
+	// (message_locations_list) rather than by walking every message: the IN
+	// keeps one row per message however many Sent folders hold it. m.date,
+	// not l.date, orders them as before: a merge (mailsync.merge) moves
+	// locations onto another message with the dates they had.
+	rows, err := s.db.Query(ctx, `SELECT m.from_addr, m.to_addrs, m.cc_addrs FROM messages m WHERE m.id IN
+		(SELECT l.message_id FROM message_locations l WHERE l.folder_id IN (SELECT value FROM json_each(?)) AND l.shown)
+		ORDER BY m.date DESC LIMIT ?`, intList(sent), sentMailRead)
 	if err != nil {
 		return p, err
 	}
