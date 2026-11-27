@@ -153,8 +153,9 @@ func (a *App) onEvent(ev events.Event) {
 	case events.AddressBooksChanged:
 		a.mail.reader.avatarsChanged(contactsChanged)
 		a.contacts().avatars = nil
-	case events.SyncStarted:
+	case events.SyncStarted: // only the sync status shows it: nothing it reads changed, so no refresh
 		a.syncing[ev.AccountID] = true
+		return
 	case events.SyncFinished:
 		delete(a.syncing, ev.AccountID)
 		delete(a.syncErr, ev.AccountID)
