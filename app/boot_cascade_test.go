@@ -78,9 +78,9 @@ func (g *gate) wait(ctx context.Context) error {
 // read and the list's held at will.
 type bootSvc struct {
 	Service
-	saved, list, accounts, folders, settings gauge
-	savedGate, listGate                      gate
-	savedDone                                atomic.Int32 // SavedViews calls that answered
+	saved, list, accounts, folders, settings, starred gauge
+	savedGate, listGate                               gate
+	savedDone                                         atomic.Int32 // SavedViews calls that answered
 }
 
 func (s *bootSvc) SavedViews(ctx context.Context) ([]core.SavedView, error) {
@@ -109,6 +109,12 @@ func (s *bootSvc) ListMessages(ctx context.Context, v core.View, cursor string, 
 		return core.MessagePage{}, err
 	}
 	return s.Service.ListMessages(ctx, v, cursor, limit)
+}
+
+func (s *bootSvc) StarredCounts(ctx context.Context) (map[int64]int, int, error) {
+	s.starred.enter()
+	defer s.starred.leave()
+	return s.Service.StarredCounts(ctx)
 }
 
 func (s *bootSvc) ListAccounts(ctx context.Context) ([]core.Account, error) {

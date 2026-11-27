@@ -1,0 +1,192 @@
+package app
+
+import (
+	"context"
+	"slices"
+	"testing"
+	"time"
+
+	"github.com/godwit-email/godwit/core"
+	"github.com/godwit-email/godwit/core/events"
+)
+
+// reads is how many times each of the refresh's reads ran so far.
+type reads struct{ list, saved, accounts, starred int32 }
+
+func (s *bootSvc) reads() reads {
+	return reads{s.list.calls.Load(), s.saved.calls.Load(), s.accounts.calls.Load(), s.starred.calls.Load()}
+}
+
+func (r reads) since(old reads) reads {
+	return reads{r.list - old.list, r.saved - old.saved, r.accounts - old.accounts, r.starred - old.starred}
+}
+
+// idle reports whether no read of the App's or the mail page's is in
+// flight or due.
+func idle(h *harness) bool {
+	a, p := h.app, h.app.mail
+	return a.MailReady() && p.viewsKnown && !p.viewsPending() && !p.list.loading && !p.listAgain && !p.waitLoad &&
+		!a.loads.loading && !a.loadAgain && a.refreshStop == nil
+}
+
+// mailEvent refreshes for a sync's event of acc and waits until the reads
+// it asked for have landed.
+func mailEvent(h *harness, acc int64) {
+	h.t.Helper()
+	h.app.onEvent(events.Event{Type: events.MessagesChanged, AccountID: acc})
+	h.advance(refreshEvery)
+	h.until("the refresh read", func() bool { return idle(h) })
+}
+
+// countsHarness is a bootHarness settled after a first mail event, whose
+// refresh read the counts: the next ones within countsEvery wait.
+func countsHarness(t *testing.T) (*harness, *bootSvc, core.Account) {
+	h, svc, accs := bootHarness(t, nil, "alice@example.com")
+	h.until("settled", func() bool { return idle(h) })
+	before := svc.reads()
+	mailEvent(h, accs[0].ID)
+	if got := svc.reads().since(before); got.accounts != 1 || got.saved != 1 || got.starred != 1 || got.list != 1 {
+		t.Fatalf("the first mail event's refresh read %+v, want everything once", got)
+	}
+	return h, svc, accs[0]
+}
+
+// While a sync's events keep coming, each refresh reads the list again
+// (it shows the change) but leaves the counts as they were; countsEvery
+// after they were read, one refresh reads them, and shows the change.
+func TestCountsWaitDuringSyncBurst(t *testing.T) {
+	h, svc, acc := countsHarness(t)
+	if h.app.unread[acc.ID] != 1 {
+		t.Fatalf("unread %v", h.app.unread)
+	}
+	ids := inboxIDs(t, h, acc)
+	before := svc.reads()
+
+	// Read elsewhere (a sync, another client): the backend's event reaches the App.
+	n := h.app.events
+	if err := h.env.Svc.SetFlags(context.Background(), ids, []string{`\Seen`}, nil); err != nil {
+		t.Fatal(err)
+	}
+	h.until("the event", func() bool { return h.app.events > n })
+	h.advance(refreshEvery)
+	h.until("the refresh read", func() bool { return idle(h) })
+	for range 10 {
+		h.app.onEvent(events.Event{Type: events.MessageReceived, AccountID: acc.ID})
+		h.advance(time.Second)
+		h.until("the refresh read", func() bool { return idle(h) })
+	}
+	got := svc.reads().since(before)
+	if got.accounts != 0 || got.saved != 0 || got.starred != 0 {
+		t.Fatalf("the burst read the counts: %+v", got)
+	}
+	if got.list < 11 {
+		t.Fatalf("%d list reads for 11 refreshes", got.list)
+	}
+	if !h.app.MailReady() || len(h.app.mail.items) != 1 || h.app.mail.items[0].Unread != 0 {
+		t.Fatalf("ready %v, the list shows %+v", h.app.MailReady(), h.app.mail.items)
+	}
+	if h.app.unread[acc.ID] != 1 || !h.app.countsOwed || h.app.countsTimer == nil {
+		t.Fatalf("unread %v, owed %v", h.app.unread, h.app.countsOwed)
+	}
+
+	before = svc.reads()
+	h.advance(countsEvery) // the burst is over: the trailing refresh
+	h.until("the trailing refresh read", func() bool { return idle(h) })
+	got = svc.reads().since(before)
+	if got.accounts != 1 || got.saved != 1 || got.starred != 1 {
+		t.Fatalf("the trailing refresh read %+v, want the counts once", got)
+	}
+	if h.app.unread[acc.ID] != 0 || h.app.countsOwed || h.app.countsTimer != nil || !h.app.MailReady() {
+		t.Fatalf("unread %v, owed %v, ready %v", h.app.unread, h.app.countsOwed, h.app.MailReady())
+	}
+
+	before = svc.reads()
+	h.advance(2 * countsEvery) // nothing owed: no other refresh
+	h.drain()
+	if got := svc.reads().since(before); got != (reads{}) {
+		t.Fatalf("read %+v with nothing owed", got)
+	}
+}
+
+// A burst that lasts reads the counts once per countsEvery.
+func TestCountsEveryDuringLongBurst(t *testing.T) {
+	h, svc, acc := countsHarness(t)
+	before := svc.reads()
+	for range 60 { // a minute of events, one a second
+		h.app.onEvent(events.Event{Type: events.MessagesChanged, AccountID: acc.ID})
+		h.advance(time.Second)
+		h.until("the refresh read", func() bool { return idle(h) })
+	}
+	got := svc.reads().since(before)
+	if got.saved < 2 || got.saved > 3 || got.accounts != got.saved || got.starred != got.saved {
+		t.Fatalf("a minute of events read %+v, want the counts every %v", got, countsEvery)
+	}
+	if got.list < 60 {
+		t.Fatalf("%d list reads for 60 refreshes", got.list)
+	}
+}
+
+// An event of an account the App does not know yet (added elsewhere)
+// reads the counts, and so the accounts, at once.
+func TestCountsAtOnceForNewAccount(t *testing.T) {
+	h, svc, acc := countsHarness(t)
+	before := svc.reads()
+	mailEvent(h, acc.ID+100)
+	if got := svc.reads().since(before); got.accounts != 1 || got.saved != 1 {
+		t.Fatalf("an unknown account's event read %+v, want the counts", got)
+	}
+}
+
+// In a saved view, a sync's event reads the view's rows again, without
+// the views' counts.
+func TestSavedViewRowsDuringBurst(t *testing.T) {
+	h, svc, acc := countsHarness(t)
+	id, err := h.env.Svc.SaveView(context.Background(), core.SavedView{Name: "Bob", Icon: "team", Doc: core.SavedViewDoc{Match: core.MatchAll,
+		Conditions: []core.RuleCondition{{Field: core.FieldFrom, Op: core.OpContains, Value: "bob"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.waitMail("the view", func() bool {
+		return idle(h) && slices.ContainsFunc(h.app.mail.views, func(b core.SavedView) bool { return b.ID == id })
+	})
+	h.app.navigate(Route{Page: PageMail, View: savedRoute(id)})
+	h.until("the view's rows", func() bool { return idle(h) && len(h.app.mail.items) == 1 })
+	if h.app.mail.items[0].Unread != 1 {
+		t.Fatalf("the view lists %+v", h.app.mail.items)
+	}
+	mailEvent(h, acc.ID) // the counts were read at the switch: the next ones wait
+	if !h.app.countsOwed {
+		t.Fatal("the counts did not wait")
+	}
+
+	before, n := svc.reads(), h.app.events
+	if err := h.env.Svc.SetFlags(context.Background(), inboxIDs(t, h, acc), []string{`\Seen`}, nil); err != nil {
+		t.Fatal(err)
+	}
+	h.until("the event", func() bool { return h.app.events > n })
+	h.advance(refreshEvery)
+	h.until("the view's rows", func() bool { return idle(h) && h.app.mail.items[0].Unread == 0 })
+	if got := svc.reads().since(before); got.saved != 0 || got.starred != 0 || got.accounts != 0 {
+		t.Fatalf("the view's rows read the counts: %+v", got)
+	}
+	if h.app.route.View != savedRoute(id) || !h.app.MailReady() {
+		t.Fatalf("route %+v, ready %v", h.app.route, h.app.MailReady())
+	}
+}
+
+// inboxIDs is the IDs of the messages in acc's inbox.
+func inboxIDs(t *testing.T, h *harness, acc core.Account) []int64 {
+	t.Helper()
+	page, err := h.env.Svc.ListMessages(context.Background(), core.View{FolderID: h.folderOf(acc, "inbox").ID}, "", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []int64
+	for _, m := range page.Items {
+		ids = append(ids, m.ID)
+	}
+	if len(ids) == 0 {
+		t.Fatal("no message in the inbox")
+	}
+	return ids
+}
