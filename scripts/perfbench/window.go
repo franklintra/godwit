@@ -75,6 +75,8 @@ func runWindow(ctx context.Context, o *opener, mail *loopMail, meta fixtureMeta,
 		return err
 	}
 	defer func() { b.stop(); b.cleanup() }()
+	wal := walWatch(o.data)
+	defer wal()
 	setup, _, err := b.dialUI(ctx, 10*time.Minute, nil, "perfbench-setup")
 	if err != nil {
 		return err
@@ -363,6 +365,7 @@ func runWindow(ctx context.Context, o *opener, mail *loopMail, meta fixtureMeta,
 		time.Sleep(time.Second)
 	}
 	end()
+	addWAL(rep, prefix, "the window part (sync, window, probes)", wal)
 	endN, endAt := stored(), time.Now()
 	rep.add(prefix+".rounds_during_sync", "count", "higher", "probe rounds that started while the sync still wrote", float64(done))
 	rep.add(prefix+".sync_msgs_per_s", "msg/s", "higher", "the account's initial sync while the window was open and probed", float64(endN-startN)/endAt.Sub(startAt).Seconds())

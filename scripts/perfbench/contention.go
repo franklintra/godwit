@@ -29,6 +29,8 @@ func runContention(ctx context.Context, o *opener, mail *loopMail, nmsg, boots i
 		return err
 	}
 	defer func() { b.stop(); b.cleanup() }()
+	wal := walWatch(o.data)
+	defer wal()
 	setup, _, err := b.dialUI(ctx, 10*time.Minute, nil, "perfbench-setup")
 	if err != nil {
 		return err
@@ -152,6 +154,7 @@ func runContention(ctx context.Context, o *opener, mail *loopMail, nmsg, boots i
 	}
 	close(stop)
 	wg.Wait()
+	addWAL(rep, prefix, "the sync and the boots", wal)
 	endN, endAt := stored(), time.Now()
 	rep.add(prefix+".boots_during_sync", "count", "higher", "boots that started while the sync still wrote", float64(during))
 	rep.add(prefix+".sync_msgs_per_s", "msg/s", "higher", "the account's initial sync, while the boots ran", float64(endN-startN)/endAt.Sub(startAt).Seconds())

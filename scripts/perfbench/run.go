@@ -22,6 +22,7 @@ type runConfig struct {
 	scale                                           float64
 	seed                                            uint64
 	runs, hotRounds, viewRounds, syncMsgs, syncRuns int
+	sessions                                        int
 	contMsgs, contBoots, pressRounds, winRounds     int
 	mem                                             int64
 	pressure, winViews                              string
@@ -53,6 +54,7 @@ func cmdRun(ctx context.Context, args []string) error {
 	mem := fl.String("mem", "350M", "memory.max of the pressured backend, page cache included")
 	fl.StringVar(&c.pressure, "pressure", "auto", "pressured parts: auto (when PERFBENCH_CGROUP is set), on, off")
 	fl.IntVar(&c.syncMsgs, "sync-messages", 10000, "messages in the folder the sync and contention parts sync (quick: 4000)")
+	fl.IntVar(&c.sessions, "sessions", 1, "warm sessions of the mem, hot and idle parts, one after the other: memory samples per run")
 	fl.Parse(args)
 	c.quick = *quick
 	c.runs, c.idle, c.hotRounds, c.viewRounds, c.syncRuns, c.contMsgs, c.contBoots, c.pressRounds = 5, 60*time.Second, 20, 5, 3, 10000, 5, 3
@@ -172,8 +174,10 @@ func run(ctx context.Context, c runConfig) error {
 			rep.Breakdown, rep.BootRPC = breakdown(cold, warm, order), last
 		}
 		if c.want("mem") || c.want("hot") || c.want("idle") {
-			if err := measureSession(ctx, c, o, meta, rep); err != nil {
-				return err
+			for range max(1, c.sessions) {
+				if err := measureSession(ctx, c, o, meta, rep); err != nil {
+					return err
+				}
 			}
 		}
 		if group != nil && c.want("pressure") {
