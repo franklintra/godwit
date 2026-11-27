@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/godwit-email/godwit/core/events"
+	"github.com/godwit-email/godwit/core/store"
 )
 
 type uiSessionKey struct{}
@@ -19,6 +20,7 @@ type uiSession struct {
 
 // WithUISession binds a fresh UI session to ctx's lifetime for a RoleUI
 // connection; cancelling ctx clears the session's foreground and compose state.
+// Its reads take the interface's own database connections (store.WithUIRead).
 func WithUISession(ctx context.Context, s *Service) context.Context {
 	sess := &uiSession{}
 	s.uiMu.Lock()
@@ -28,7 +30,7 @@ func WithUISession(ctx context.Context, s *Service) context.Context {
 	s.uiSessions[sess] = struct{}{}
 	s.uiMu.Unlock()
 	context.AfterFunc(ctx, func() { s.removeUISession(sess) })
-	return context.WithValue(ctx, uiSessionKey{}, sess)
+	return store.WithUIRead(context.WithValue(ctx, uiSessionKey{}, sess))
 }
 
 func uiSessionFromContext(ctx context.Context) *uiSession {
