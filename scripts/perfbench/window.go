@@ -386,13 +386,24 @@ func runWindow(ctx context.Context, o *opener, mail *loopMail, meta fixtureMeta,
 		w := waits[sp.group]
 		waits[sp.group] = [2]time.Duration{w[0] + wait, w[1] + exec}
 	}
+	var allLanes []string
+	for _, c := range calls {
+		if !slices.Contains(allLanes, c.Lane) {
+			allLanes = append(allLanes, c.Lane)
+		}
+	}
+	sort.Strings(allLanes)
 	for _, rs := range roundSpans {
-		bg, all := busyShare(calls, rs.from, rs.to)
-		rep.add(prefix+".conn_busy_pct", "%", "lower", "per round: share of the round the one SQLite connection was busy at all", all*100)
-		rep.add(prefix+".conn_busy_background_pct", "%", "lower", "per round: share of the round the connection ran the backend's own work (sync, rules, labels)", bg*100)
+		lanes := busyShare(calls, rs.from, rs.to)
+		bg, all := busiest(lanes)
+		rep.add(prefix+".conn_busy_pct", "%", "lower", "per round: share of the round the busiest SQLite connection was busy at all", all*100)
+		rep.add(prefix+".conn_busy_background_pct", "%", "lower", "per round: share of the round the busiest connection ran the backend's own work (sync, rules, labels)", bg*100)
+		for _, lane := range allLanes {
+			rep.add(prefix+".conn_busy_pct_"+lane, "%", "lower", "per round: share of the round connection "+lane+" (w: the writer, r<i>: a reader) was busy", lanes[lane].All*100)
+		}
 		sh := clientShare(calls, rs.from, rs.to)
-		rep.add(prefix+".conn_busy_window_pct", "%", "lower", "per round: share of the round the connection ran the window's own reloads (SavedViews, counts, lists, avatars)", sh[clientWindow]*100)
-		rep.add(prefix+".conn_busy_user_pct", "%", "lower", "per round: share of the round the connection ran the probes' statements", sh[clientUser]*100)
+		rep.add(prefix+".conn_busy_window_pct", "%", "lower", "per round: connection time the window's own reloads took (SavedViews, counts, lists, avatars), summed over connections, as a share of the round", sh[clientWindow]*100)
+		rep.add(prefix+".conn_busy_user_pct", "%", "lower", "per round: connection time the probes' statements took, summed over connections, as a share of the round", sh[clientUser]*100)
 	}
 	from, to := roundSpans[0].from, roundSpans[len(roundSpans)-1].to
 	line := fmt.Sprintf("%s: connection time by client over the rounds (%s):", prefix, to.Sub(from).Round(time.Millisecond))

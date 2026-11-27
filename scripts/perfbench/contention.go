@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -20,8 +21,8 @@ import (
 // readSnapshot: GetSettings, ListAccounts, ListFolders per account,
 // RecentSignInCodes), a probe times ListAccounts every 250 ms, and the
 // interface opens boots times against the running backend. The SQL trace
-// splits each call's database time into waiting for the one SQLite
-// connection and running.
+// splits each call's database time into waiting for its SQLite connection
+// (the writer or a reader, sqlCall) and running.
 func runContention(ctx context.Context, o *opener, mail *loopMail, nmsg, boots int, prefix string, rep *report) error {
 	b, err := startBackend(o.bin, o.data, o.env, o.group, true)
 	if err != nil {
@@ -162,6 +163,13 @@ func runContention(ctx context.Context, o *opener, mail *loopMail, nmsg, boots i
 	calls := readSQL(b.sqlPath)
 	from, to := wins[0].from, wins[len(wins)-1].to
 	sums := sumByCall(calls, from, to)
+	var allLanes []string
+	for _, c := range calls {
+		if !slices.Contains(allLanes, c.Lane) {
+			allLanes = append(allLanes, c.Lane)
+		}
+	}
+	sort.Strings(allLanes)
 	var laWait, laExec []float64
 	for _, s := range sums {
 		if s.Client == "perfbench-probe" && s.Method == "ListAccounts" {
@@ -169,7 +177,7 @@ func runContention(ctx context.Context, o *opener, mail *loopMail, nmsg, boots i
 			laExec = append(laExec, ms(s.Exec))
 		}
 	}
-	rep.add(prefix+".probe_list_accounts_sql_wait_ms", "ms", "lower", "per ListAccounts call: its statements' time queued behind other work on the one SQLite connection", laWait...)
+	rep.add(prefix+".probe_list_accounts_sql_wait_ms", "ms", "lower", "per ListAccounts call: its statements' time queued behind other work on their SQLite connection", laWait...)
 	rep.add(prefix+".probe_list_accounts_sql_exec_ms", "ms", "lower", "per ListAccounts call: its statements' time running", laExec...)
 	var qWait, qExec []float64
 	for _, w := range wins {
@@ -180,11 +188,16 @@ func runContention(ctx context.Context, o *opener, mail *loopMail, nmsg, boots i
 				exec += s.Exec
 			}
 		}
-		rep.add(prefix+".boot_sql_wait_ms", "ms", "lower", "per boot: the interface's statements' time queued for the SQLite connection", ms(wait))
+		rep.add(prefix+".boot_sql_wait_ms", "ms", "lower", "per boot: the interface's statements' time queued for their SQLite connection", ms(wait))
 		rep.add(prefix+".boot_sql_exec_ms", "ms", "lower", "per boot: the interface's statements' time running", ms(exec))
-		bg, all := busyShare(calls, w.from, w.to)
-		rep.add(prefix+".boot_conn_busy_background_pct", "%", "lower", "per boot: share of the boot the connection ran the backend's own work (sync, rules, labels)", bg*100)
-		rep.add(prefix+".boot_conn_busy_pct", "%", "lower", "per boot: share of the boot the connection was busy at all", all*100)
+		lanes := busyShare(calls, w.from, w.to)
+		bg, all := busiest(lanes)
+		rep.add(prefix+".boot_conn_busy_background_pct", "%", "lower", "per boot: share of the boot the busiest connection ran the backend's own work (sync, rules, labels)", bg*100)
+		rep.add(prefix+".boot_conn_busy_pct", "%", "lower", "per boot: share of the boot the busiest connection was busy at all", all*100)
+		for _, lane := range allLanes {
+			b := lanes[lane]
+			rep.add(prefix+".boot_conn_busy_pct_"+lane, "%", "lower", "per boot: share of the boot connection "+lane+" (w: the writer, r<i>: a reader) was busy", b.All*100)
+		}
 	}
 	for _, c := range calls {
 		if c.Client == "perfbench-ui" && !c.Start.Before(from) && !c.Start.After(to) {
@@ -212,7 +225,7 @@ func runContention(ctx context.Context, o *opener, mail *loopMail, nmsg, boots i
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	line := prefix + ": connection time by client during the boots:"
+	line := prefix + ": connection time by client during the boots (all connections):"
 	for _, k := range keys {
 		line += fmt.Sprintf(" %s %.0f ms;", k, ms(byClient[k]))
 	}

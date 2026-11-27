@@ -11,18 +11,33 @@ import (
 	"time"
 )
 
-// sqlCall is one database call from the backend's SQL trace. Every call
-// waits for the one SQLite connection, so sorted by end, a call runs from
-// the later of its start and the previous call's end: Wait is the time
-// before that (queued behind others), Exec the rest.
+// sqlCall is one database call from the backend's SQL trace. The kind
+// names the connection that ran it (internal/perftrace): q, x and t<n> ran
+// on the writer, lane "w"; q@r<i> on read-only connection i, lane "r<i>".
+// Calls on one connection run one at a time, so sorted by end within a
+// lane, a call runs from the later of its start and the lane's previous
+// end: Wait is the time before that, Exec the rest. A reader call's Wait
+// includes its wait for a free reader, charged to the reader it got. A
+// trace from before the readers has the writer lane only, so its numbers
+// are those of the one connection; with readers, Wait and Exec are per
+// lane and do not compare one to one with such a trace.
 type sqlCall struct {
 	Start, End time.Time
 	Kind       string
+	Lane       string // "w" for the writer, "r0", "r1"... for the readers
 	Client     string // the Local API client ("" for the backend's own work)
 	Method     string
 	Seq        string
 	Stmt       string
 	Wait, Exec time.Duration
+}
+
+// laneOf is the connection a trace kind ran on.
+func laneOf(kind string) string {
+	if _, lane, ok := strings.Cut(kind, "@"); ok {
+		return lane
+	}
+	return "w"
 }
 
 func readSQL(path string) []sqlCall {
@@ -41,7 +56,7 @@ func readSQL(path string) []sqlCall {
 		}
 		s, _ := strconv.ParseInt(p[0], 10, 64)
 		e, _ := strconv.ParseInt(p[1], 10, 64)
-		c := sqlCall{Start: time.Unix(0, s), End: time.Unix(0, e), Kind: p[2], Stmt: p[4]}
+		c := sqlCall{Start: time.Unix(0, s), End: time.Unix(0, e), Kind: p[2], Lane: laneOf(p[2]), Stmt: p[4]}
 		if tag := p[3]; tag != "" {
 			client, rest, _ := strings.Cut(tag, "/")
 			c.Client = client
@@ -49,21 +64,28 @@ func readSQL(path string) []sqlCall {
 		}
 		out = append(out, c)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].End.Before(out[j].End) })
-	var prev time.Time
-	for i := range out {
-		run := out[i].Start
-		if prev.After(run) {
-			run = prev
-		}
-		if run.After(out[i].End) { // clock jitter
-			run = out[i].End
-		}
-		out[i].Wait = run.Sub(out[i].Start)
-		out[i].Exec = out[i].End.Sub(run)
-		prev = out[i].End
-	}
+	splitWait(out)
 	return out
+}
+
+// splitWait sorts calls by end and sets each one's Wait and Exec within
+// its lane.
+func splitWait(calls []sqlCall) {
+	sort.Slice(calls, func(i, j int) bool { return calls[i].End.Before(calls[j].End) })
+	prev := map[string]time.Time{}
+	for i := range calls {
+		c := &calls[i]
+		run := c.Start
+		if p := prev[c.Lane]; p.After(run) {
+			run = p
+		}
+		if run.After(c.End) { // clock jitter
+			run = c.End
+		}
+		c.Wait = run.Sub(c.Start)
+		c.Exec = c.End.Sub(run)
+		prev[c.Lane] = c.End
+	}
 }
 
 // sqlSums is wait and exec summed per Local API call (client, method, seq).
@@ -93,8 +115,8 @@ func sumByCall(calls []sqlCall, from, to time.Time) map[string]*sqlSum {
 	return out
 }
 
-// blockers are the backend's own calls (no client) that held the connection
-// longest inside [from, to].
+// blockers are the backend's own calls (no client) that held a
+// connection longest inside [from, to]; Kind says which.
 func blockers(calls []sqlCall, from, to time.Time, n int) []sqlCall {
 	var bg []sqlCall
 	for _, c := range calls {
@@ -109,14 +131,18 @@ func blockers(calls []sqlCall, from, to time.Time, n int) []sqlCall {
 	return bg
 }
 
-// busyShare is the share of [from, to] the connection spent on calls
-// with no client (sync, rules, labeler...), and on any call.
-func busyShare(calls []sqlCall, from, to time.Time) (background, all float64) {
+// laneBusy is the share of a span one connection spent on calls with no
+// client (sync, rules, labeler...), and on any call.
+type laneBusy struct{ Background, All float64 }
+
+// busyShare is laneBusy per connection over [from, to]. Each lane counts
+// alone, up to 1: the writer and a reader can both be busy all along.
+func busyShare(calls []sqlCall, from, to time.Time) map[string]laneBusy {
 	span := to.Sub(from)
+	out := map[string]laneBusy{}
 	if span <= 0 {
-		return 0, 0
+		return out
 	}
-	var bg, any time.Duration
 	for _, c := range calls {
 		s, e := c.End.Add(-c.Exec), c.End
 		if s.Before(from) {
@@ -128,10 +154,22 @@ func busyShare(calls []sqlCall, from, to time.Time) (background, all float64) {
 		if e.Before(s) {
 			continue
 		}
-		any += e.Sub(s)
+		b := out[c.Lane]
+		share := float64(e.Sub(s)) / float64(span)
+		b.All += share
 		if c.Method == "" {
-			bg += e.Sub(s)
+			b.Background += share
 		}
+		out[c.Lane] = b
 	}
-	return float64(bg) / float64(span), float64(any) / float64(span)
+	return out
+}
+
+// busiest is the highest background and overall share among lanes (with
+// one connection, that connection's).
+func busiest(m map[string]laneBusy) (background, all float64) {
+	for _, b := range m {
+		background, all = max(background, b.Background), max(all, b.All)
+	}
+	return background, all
 }

@@ -6,10 +6,13 @@
 // when each step of a backend's start ended.
 //
 // GODWIT_SQL_TRACE names a file that gets one tab-separated line per
-// database call: start and end (unix ns), kind (q, x, t), the Local API
-// call it serves ("" for background work) and the statement's start.
-// Every call waits for the one SQLite connection, so a reader recovers
-// each call's wait from the order of the ends.
+// database call: start and end (unix ns), kind, the Local API call it
+// serves ("" for background work) and the statement's start. The kind
+// names the call and the connection that ran it: q, x and t<n> (a query,
+// an execute, a transaction of n statements) ran on the writer, q@r<i> on
+// read-only connection i (core/store's readers). Calls on one connection
+// run one at a time, so a reader recovers each call's wait from the order
+// of the ends within its connection.
 package perftrace
 
 import (
