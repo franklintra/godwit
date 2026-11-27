@@ -35,13 +35,14 @@ type replyStatus struct {
 
 // logicalMail is one message of a conversation, however many folders hold it.
 type logicalMail struct {
-	mid                              string
-	id, date                         int64
-	from, replyTo, listID, listUnsub string
-	auto, precedence                 string
-	to, cc                           []string
-	roles                            []string
-	answered                         bool
+	mid               string
+	id, date          int64
+	from, replyTo     string
+	listID, listUnsub string // listHeaders: read only where directMail asks
+	auto, precedence  string // listHeaders too
+	to, cc            []string
+	roles             []string
+	answered          bool
 }
 
 func (m *logicalMail) in(role string) bool { return slices.Contains(m.roles, role) }
@@ -234,11 +235,16 @@ func (s *Service) replyStatusesOf(ctx context.Context, now int64, roles map[int6
 	if err != nil {
 		return nil, err
 	}
-	out := map[int64]replyStatus{}
-	strangers := map[int64]int64{} // unreplied mail from who the user never wrote to: its row, to its conversation
+	type active struct {
+		tid     int64
+		newest  *logicalMail
+		engaged bool // the user took part in it, or has written to its sender
+	}
+	var convs []active
+	var undecided []*logicalMail // newest mail only directMail can decide on: it needs listHeaders
 	for tid, msgs := range threads {
 		var newest *logicalMail
-		engaged := false // the user took part in it, or has written to its sender
+		engaged := false
 		for _, m := range msgs {
 			if m.counted() && (newest == nil || m.date > newest.date || m.date == newest.date && m.id > newest.id) {
 				newest = m
@@ -249,6 +255,18 @@ func (s *Service) replyStatusesOf(ctx context.Context, now int64, roles map[int6
 			continue
 		}
 		engaged = engaged || people.known[gomail.AddrKey(newest.from)] || people.known[gomail.AddrKey(newest.replyTo)]
+		convs = append(convs, active{tid, newest, engaged})
+		if _, _, decided := settledReplyStatus(newest, people, marks[tid], repliedAt[tid]); !decided {
+			undecided = append(undecided, newest)
+		}
+	}
+	if err := s.listHeaders(ctx, undecided); err != nil {
+		return nil, err
+	}
+	out := map[int64]replyStatus{}
+	strangers := map[int64]int64{} // unreplied mail from who the user never wrote to: its row, to its conversation
+	for _, c := range convs {
+		tid, msgs, newest, engaged := c.tid, threads[c.tid], c.newest, c.engaged
 		if st, ok := threadReplyStatus(newest, people, engaged, marks[tid], repliedAt[tid]); ok {
 			st.Settled, st.Newest = settled(msgs, people, marks[tid], repliedAt[tid]), newest.id
 			out[tid] = st
@@ -261,7 +279,7 @@ func (s *Service) replyStatusesOf(ctx context.Context, now int64, roles map[int6
 }
 
 // logicalMails is the mail of the conversations whose messages m (joined to
-// their thread t) meet cond, by conversation.
+// their thread t) meet cond, by conversation, without listHeaders.
 func (s *Service) logicalMails(ctx context.Context, roles map[int64]string, cond string, args ...any) (map[int64]map[string]*logicalMail, error) {
 	rows, err := s.db.Query(ctx, logicalMailsSQL(cond), args...)
 	if err != nil {
@@ -277,22 +295,50 @@ func (s *Service) logicalMails(ctx context.Context, roles map[int64]string, cond
 		m := threads[tid][key]
 		if m == nil {
 			m = &logicalMail{mid: mid, id: id, date: store.Int(r[3]), from: store.Str(r[4]), to: jsonList(store.Str(r[5])), cc: jsonList(store.Str(r[6])),
-				replyTo: store.Str(r[7]), listID: store.Str(r[8]), listUnsub: store.Str(r[9]), auto: store.Str(r[10]), precedence: store.Str(r[11])}
+				replyTo: store.Str(r[7])}
 			threads[tid][key] = m
 		}
-		for _, folder := range scanFolderIDs(r[13]) {
+		for _, folder := range scanFolderIDs(r[9]) {
 			m.roles = append(m.roles, roles[folder])
 		}
-		m.answered = m.answered || strings.Contains(store.Str(r[12]), `\Answered`)
+		m.answered = m.answered || strings.Contains(store.Str(r[8]), `\Answered`)
 	}
 	return threads, nil
 }
 
-// logicalMailsSQL is the query logicalMails runs with cond.
+// logicalMailsSQL is the query logicalMails runs with cond. Its columns all
+// come before the bodies in a messages row (CREATE TABLE messages), so a
+// row's body overflow pages are never read; listHeaders reads the columns
+// added after them.
 func logicalMailsSQL(cond string) string {
 	return `SELECT m.thread_id, m.id, COALESCE(m.message_id, ''), COALESCE(m.date, 0), m.from_addr, m.to_addrs, m.cc_addrs, m.reply_to,
-		m.list_id, m.list_unsubscribe, m.auto_submitted, m.precedence, m.flags, ` + shownFolders + ` FROM messages m JOIN threads t ON t.id = m.thread_id
+		m.flags, ` + shownFolders + ` FROM messages m JOIN threads t ON t.id = m.thread_id
 		WHERE ` + cond + ` AND ` + notPurgedCond + ` ORDER BY m.id`
+}
+
+// listHeaders reads the list and automation headers of msgs, which
+// directMail asks: these columns come after the bodies in a messages row, so
+// reading them walks each body's overflow pages. Only the newest mail of a
+// conversation nothing else has decided on needs them.
+func (s *Service) listHeaders(ctx context.Context, msgs []*logicalMail) error {
+	if len(msgs) == 0 {
+		return nil
+	}
+	byID := make(map[int64]*logicalMail, len(msgs))
+	ids := make([]int64, len(msgs))
+	for i, m := range msgs {
+		byID[m.id], ids[i] = m, m.id
+	}
+	rows, err := s.db.Query(ctx, `SELECT id, list_id, list_unsubscribe, auto_submitted, precedence FROM messages
+		WHERE id IN (SELECT value FROM json_each(?))`, intList(ids))
+	if err != nil {
+		return err
+	}
+	for _, r := range rows.Values {
+		m := byID[store.Int(r[0])]
+		m.listID, m.listUnsub, m.auto, m.precedence = store.Str(r[1]), store.Str(r[2]), store.Str(r[3]), store.Str(r[4])
+	}
+	return nil
 }
 
 // threadsIn is the condition that column col is one of threads (nil: no
@@ -372,24 +418,38 @@ func (s *Service) dropMassMail(ctx context.Context, out map[int64]replyStatus, s
 
 // threadReplyStatus is the status of a conversation whose newest counted mail
 // is m, with its archive mark, and repliedAt the latest reply queued (0: none).
+// Unless settledReplyStatus decides, m needs its listHeaders.
 func threadReplyStatus(m *logicalMail, p mailPeople, engaged bool, mark archiveMark, repliedAt int64) (replyStatus, bool) {
-	marked := mark.has && (m.mid != "" && mark.mid == m.mid || m.date <= mark.date)
-	if marked {
-		return replyStatus{}, false
+	if st, ok, decided := settledReplyStatus(m, p, mark, repliedAt); decided {
+		return st, ok
 	}
-	if p.mine(m) {
-		return replyStatus{Kind: ReplyStatusWaiting, Since: max(m.date, repliedAt)}, true
-	}
-	if m.in("archive") && !m.in("inbox") { // archived on another device
-		return replyStatus{}, false
-	}
-	if repliedAt >= m.date {
-		return replyStatus{Kind: ReplyStatusWaiting, Since: repliedAt}, true
-	}
-	if m.answered || !directMail(m, p, engaged) {
+	if !directMail(m, p, engaged) {
 		return replyStatus{}, false
 	}
 	return replyStatus{Kind: ReplyStatusUnreplied, NewReply: mark.has}, true
+}
+
+// settledReplyStatus is threadReplyStatus as far as it goes without asking
+// directMail: decided is false when only that is left, so m is 未回复 if it
+// is direct mail and has no status otherwise.
+func settledReplyStatus(m *logicalMail, p mailPeople, mark archiveMark, repliedAt int64) (st replyStatus, ok, decided bool) {
+	marked := mark.has && (m.mid != "" && mark.mid == m.mid || m.date <= mark.date)
+	if marked {
+		return replyStatus{}, false, true
+	}
+	if p.mine(m) {
+		return replyStatus{Kind: ReplyStatusWaiting, Since: max(m.date, repliedAt)}, true, true
+	}
+	if m.in("archive") && !m.in("inbox") { // archived on another device
+		return replyStatus{}, false, true
+	}
+	if repliedAt >= m.date {
+		return replyStatus{Kind: ReplyStatusWaiting, Since: repliedAt}, true, true
+	}
+	if m.answered {
+		return replyStatus{}, false, true
+	}
+	return replyStatus{}, false, false
 }
 
 // Sender addresses nobody waits for an answer from, by the words of their

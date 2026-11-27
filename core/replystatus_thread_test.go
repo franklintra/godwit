@@ -46,9 +46,11 @@ func refMailPeople(ctx context.Context, s *Service, roles map[int64]string) (mai
 	return p, nil
 }
 
-// refReplyStatuses is replyStatuses as it read before: every conversation,
-// with refMailPeople.
+// refReplyStatuses is replyStatuses as it read before (perf/bench2 0125090),
+// verbatim but for its helpers' names: every conversation, every message
+// with all its headers, with refMailPeople.
 func refReplyStatuses(ctx context.Context, s *Service, now int64) (map[int64]replyStatus, error) {
+	cutoff := now - replyStatusDays*86400
 	roles, err := s.folderRoles(ctx)
 	if err != nil {
 		return nil, err
@@ -57,7 +59,93 @@ func refReplyStatuses(ctx context.Context, s *Service, now int64) (map[int64]rep
 	if err != nil {
 		return nil, err
 	}
-	return s.replyStatusesOf(ctx, now, roles, people, nil)
+	threads, err := refLogicalMails(ctx, s, roles, "t.last_date >= ?", cutoff)
+	if err != nil {
+		return nil, err
+	}
+	marks, err := s.archiveMarks(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	repliedAt, err := s.repliedAt(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	out := map[int64]replyStatus{}
+	strangers := map[int64]int64{}
+	for tid, msgs := range threads {
+		var newest *logicalMail
+		engaged := false
+		for _, m := range msgs {
+			if m.counted() && (newest == nil || m.date > newest.date || m.date == newest.date && m.id > newest.id) {
+				newest = m
+			}
+			engaged = engaged || people.mine(m)
+		}
+		if newest == nil || newest.date < cutoff {
+			continue
+		}
+		engaged = engaged || people.known[gomail.AddrKey(newest.from)] || people.known[gomail.AddrKey(newest.replyTo)]
+		if st, ok := refThreadReplyStatus(newest, people, engaged, marks[tid], repliedAt[tid]); ok {
+			st.Settled, st.Newest = settled(msgs, people, marks[tid], repliedAt[tid]), newest.id
+			out[tid] = st
+			if st.Kind == ReplyStatusUnreplied && !engaged {
+				strangers[newest.id] = tid
+			}
+		}
+	}
+	return out, s.dropMassMail(ctx, out, strangers)
+}
+
+// refLogicalMails is logicalMails as it read before: every column of every
+// message.
+func refLogicalMails(ctx context.Context, s *Service, roles map[int64]string, cond string, args ...any) (map[int64]map[string]*logicalMail, error) {
+	rows, err := s.db.Query(ctx, `SELECT m.thread_id, m.id, COALESCE(m.message_id, ''), COALESCE(m.date, 0), m.from_addr, m.to_addrs, m.cc_addrs, m.reply_to,
+		m.list_id, m.list_unsubscribe, m.auto_submitted, m.precedence, m.flags, `+shownFolders+` FROM messages m JOIN threads t ON t.id = m.thread_id
+		WHERE `+cond+` AND `+notPurgedCond+` ORDER BY m.id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	threads := map[int64]map[string]*logicalMail{}
+	for _, r := range rows.Values {
+		tid, id, mid := store.Int(r[0]), store.Int(r[1]), store.Str(r[2])
+		key := "\x00" + store.Str(r[1])
+		if threads[tid] == nil {
+			threads[tid] = map[string]*logicalMail{}
+		}
+		m := threads[tid][key]
+		if m == nil {
+			m = &logicalMail{mid: mid, id: id, date: store.Int(r[3]), from: store.Str(r[4]), to: jsonList(store.Str(r[5])), cc: jsonList(store.Str(r[6])),
+				replyTo: store.Str(r[7]), listID: store.Str(r[8]), listUnsub: store.Str(r[9]), auto: store.Str(r[10]), precedence: store.Str(r[11])}
+			threads[tid][key] = m
+		}
+		for _, folder := range scanFolderIDs(r[13]) {
+			m.roles = append(m.roles, roles[folder])
+		}
+		m.answered = m.answered || strings.Contains(store.Str(r[12]), `\Answered`)
+	}
+	return threads, nil
+}
+
+// refThreadReplyStatus is threadReplyStatus as it read before.
+func refThreadReplyStatus(m *logicalMail, p mailPeople, engaged bool, mark archiveMark, repliedAt int64) (replyStatus, bool) {
+	marked := mark.has && (m.mid != "" && mark.mid == m.mid || m.date <= mark.date)
+	if marked {
+		return replyStatus{}, false
+	}
+	if p.mine(m) {
+		return replyStatus{Kind: ReplyStatusWaiting, Since: max(m.date, repliedAt)}, true
+	}
+	if m.in("archive") && !m.in("inbox") {
+		return replyStatus{}, false
+	}
+	if repliedAt >= m.date {
+		return replyStatus{Kind: ReplyStatusWaiting, Since: repliedAt}, true
+	}
+	if m.answered || !directMail(m, p, engaged) {
+		return replyStatus{}, false
+	}
+	return replyStatus{Kind: ReplyStatusUnreplied, NewReply: mark.has}, true
 }
 
 // refThreadDeadline is ThreadDeadline as it read before, with statuses the
@@ -328,6 +416,9 @@ func TestThreadReplyStatusMatchesWholeMailbox(t *testing.T) {
 				require.Positive(t, kinds[ReplyStatusWaiting], "and 等待回复 ones")
 				require.Less(t, len(all), len(mb.threads), "and some with neither")
 
+				full, err := s.replyStatuses(bg, now)
+				require.NoError(t, err)
+				assert.Equal(t, all, full, "the whole mailbox, as the views read it")
 				got, err := s.threadReplyStatuses(bg, now, mb.threads...)
 				require.NoError(t, err)
 				assert.Equal(t, all, got, "every conversation at once")
