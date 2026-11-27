@@ -13,10 +13,12 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/godwit-email/godwit/app"
+	"github.com/godwit-email/godwit/internal/perftrace"
 )
 
 // main turns SIGINT and SIGTERM (Ctrl-C on Windows) into cancelling run's ctx.
 func main() {
+	perftrace.Mark("main")
 	inMain = true
 	if v := mygo.App.Version(); v != "" {
 		app.Version = v

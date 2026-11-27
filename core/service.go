@@ -34,6 +34,7 @@ import (
 	"github.com/godwit-email/godwit/internal/avatar"
 	"github.com/godwit-email/godwit/internal/imagecache"
 	"github.com/godwit-email/godwit/internal/imagefetch"
+	"github.com/godwit-email/godwit/internal/perftrace"
 	"github.com/godwit-email/godwit/internal/sysproxy"
 )
 
@@ -321,6 +322,7 @@ func New(ctx context.Context, opts Options) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	perftrace.Mark("core.store.Open")
 	install, err := loadInstallID(ctx, db)
 	if err != nil {
 		db.Close()
@@ -328,11 +330,13 @@ func New(ctx context.Context, opts Options) (*Service, error) {
 	}
 	s := &Service{db: db, bus: events.New(), dataDir: opts.DataDir, opts: opts, installID: install, streamsEnd: make(chan struct{}),
 		clock: testClock, hookClock: testHookClock, pluginClock: testPluginClock, labelWake: make(chan struct{}, 1), summaryWake: make(chan struct{}, 1), securityWake: make(chan struct{}, 1), reclaimWake: make(chan struct{}, 1), abWake: make(chan struct{}, 1)}
+	perftrace.Mark("core.install_id")
 	s.ledger = &runLedger{db: db, host: s}
 	if err := s.recoverOutbox(ctx); err != nil {
 		db.Close()
 		return nil, err
 	}
+	perftrace.Mark("core.recover_outbox")
 	s.labelJudge = s.defaultLabelJudge
 	s.securityJudge = s.defaultSecurityJudge
 	s.securityRaw = s.GetRawMessage
@@ -377,69 +381,86 @@ func New(ctx context.Context, opts Options) (*Service, error) {
 	if opts.RecognitionModelClient == nil {
 		s.opts.RecognitionModelClient = &http.Client{Transport: imagefetch.NewTransport(false)} // no overall limit: downloadFile stops a stalled one
 	}
+	perftrace.Mark("core.proxy_and_clients")
 	if err := s.openImageCache(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("image cache: %w", err)
 	}
+	perftrace.Mark("core.image_cache")
 	s.registerAskTools()
 	s.registerAssistTools()
 	s.registerQuestionTool()
+	perftrace.Mark("core.register_tools")
 	if err := s.backfillHistories(ctx); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("conversation histories: %w", err)
 	}
+	perftrace.Mark("core.backfill_histories")
 	if err := s.backfillPi(ctx); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("conversation histories: %w", err)
 	}
+	perftrace.Mark("core.backfill_pi")
 	if err := s.backfillSlugs(ctx); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("model service slugs: %w", err)
 	}
+	perftrace.Mark("core.backfill_slugs")
 	if err := s.captureAliases(ctx); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("model service aliases: %w", err)
 	}
+	perftrace.Mark("core.capture_aliases")
 	if err := s.fixSignatureNames(ctx); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("signature names: %w", err)
 	}
+	perftrace.Mark("core.fix_signature_names")
 	if err := s.seedLabels(ctx); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("labels: %w", err)
 	}
+	perftrace.Mark("core.seed_labels")
 	if err := s.seedSavedViews(ctx); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("views: %w", err)
 	}
+	perftrace.Mark("core.seed_saved_views")
 	if err := s.sweepModelKeys(ctx); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("model service keys: %w", err)
 	}
+	perftrace.Mark("core.sweep_model_keys")
 	if err := s.cleanOrphans(ctx); err != nil {
 		db.Close()
 		return nil, err
 	}
+	perftrace.Mark("core.clean_orphans")
 	if opts.Registry != nil {
 		if err := s.applyCachedRegistry(ctx); err != nil {
 			db.Close()
 			return nil, fmt.Errorf("plugin registry: %w", err)
 		}
 	}
+	perftrace.Mark("core.registry_cache")
 	s.sweepAssets(ctx) // best effort: what is left is only disk space
 	// 保留 30 天 holds with masking or the AI off since, when nothing reads or writes the log.
+	perftrace.Mark("core.sweep_assets")
 	if err := s.exec(ctx, pruneMaskLog()); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("masking log: %w", err)
 	}
+	perftrace.Mark("core.prune_mask_log")
 	if err := s.startPlugins(ctx); err != nil {
 		s.Close() // stops dispatchers already started
 		return nil, err
 	}
+	perftrace.Mark("core.start_plugins")
 	if err := s.loadMCPSecrets(ctx); err != nil {
 		s.Close()
 		return nil, err
 	}
+	perftrace.Mark("core.mcp_secrets")
 	s.startJanitor()
 	s.startExternalSync()
 	s.startReclaim()
@@ -465,6 +486,7 @@ func New(ctx context.Context, opts Options) (*Service, error) {
 		s.loadCatalog()
 		s.startCatalogRefresh()
 	}
+	perftrace.Mark("core.start_background")
 	accs, err := s.ListAccounts(ctx)
 	if err != nil {
 		s.Close()
@@ -475,11 +497,14 @@ func New(ctx context.Context, opts Options) (*Service, error) {
 			s.startWorker(a.ID)
 		}
 	}
+	perftrace.Mark("core.start_workers")
 	s.startAddressBookSync()
+	perftrace.Mark("core.address_books")
 	if err := s.ledger.recover(ctx); err != nil {
 		s.Close()
 		return nil, err
 	}
+	perftrace.Mark("core.ledger_recover")
 	return s, nil
 }
 

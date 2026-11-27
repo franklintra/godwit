@@ -27,6 +27,7 @@ import (
 	"github.com/godwit-email/godwit/core/events"
 	gomail "github.com/godwit-email/godwit/core/mail"
 	"github.com/godwit-email/godwit/internal/i18n"
+	"github.com/godwit-email/godwit/internal/perftrace"
 	"github.com/godwit-email/godwit/internal/syslang"
 	"github.com/godwit-email/godwit/ownerlock"
 	"github.com/godwit-email/godwit/rpc"
@@ -179,6 +180,7 @@ func headless(ctx context.Context, dataDir string, stderr io.Writer, uiStarted b
 		release, err = ownerlock.Acquire(dataDir)
 	}
 	lang := detect()
+	perftrace.Mark("lock_and_language")
 	if errors.Is(err, ownerlock.ErrAnotherOwner) {
 		i18n.SetLanguage(lang)
 		fmt.Fprintln(stderr, i18n.T("app.another_owner"))
@@ -269,7 +271,9 @@ func startHeadlessServer(ctx context.Context, dataDir string, stderr io.Writer, 
 		return nil, 1
 	}
 	opts.Keyring = kr
+	perftrace.Mark("headless.prep")
 	svc, err := core.New(ctx, opts)
+	perftrace.Mark("core.New")
 	if err != nil {
 		fmt.Fprintln(stderr, "godwit:", err)
 		if errors.Is(err, fs.ErrPermission) {
@@ -297,6 +301,7 @@ func startHeadlessServer(ctx context.Context, dataDir string, stderr io.Writer, 
 		external = stErr == nil && st.LocalAPI
 	}
 	srv, err := rpcbind.ListenWith(dataDir, svc, rpcbind.ListenOptions{Version: app.Version, External: external, UIStarted: uiStarted})
+	perftrace.Mark("listen")
 	if err != nil {
 		slog.Error("listen", "err", err)
 		closeSvc()
