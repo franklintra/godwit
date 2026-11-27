@@ -1244,7 +1244,7 @@ func (p *mailPage) loadOlder() {
 	a := p.a
 	o.folder = f
 	var more bool
-	o.read.Run(a, func(ctx context.Context) (err error) {
+	o.read.RunKeep(a, func(ctx context.Context) (err error) { // it stores what it fetched: let it finish
 		more, err = a.svc.LoadOlder(ctx, f)
 		return err
 	}, func(err error) {
