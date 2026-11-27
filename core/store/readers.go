@@ -46,9 +46,12 @@ const (
 	// waits only while the WAL index is being rebuilt or reset.
 	readerBusyTimeout = 5 * time.Second
 	// readerCacheKiB is PRAGMA cache_size on each reader, in KiB (SQLite's
-	// default is 2,000). Under a sync the writer changes the database every
-	// few milliseconds and a reader drops its cache at each change, so a
-	// larger one holds memory, not hits; the OS page cache serves the rest.
+	// default, which the writer keeps, is 2,000). Under a sync the writer
+	// changes the database every few milliseconds and a reader drops its
+	// cache at each change; the OS page cache serves the rest. The same
+	// scans run 5 to 17% longer on a reader than on the writer during
+	// perfbench's sync; whether the default size would close that gap
+	// has not been measured.
 	readerCacheKiB = 1024
 )
 
