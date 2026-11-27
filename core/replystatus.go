@@ -52,31 +52,62 @@ func (m *logicalMail) counted() bool {
 	return slices.ContainsFunc(m.roles, func(r string) bool { return r != "trash" && r != "junk" && r != "drafts" })
 }
 
-// folderRoles is each folder's role as folderRoleSQL gives it, All Mail
-// standing in for archive with no regard to the copies a message has.
-func (s *Service) folderRoles(ctx context.Context) (map[int64]string, error) {
+// folderRow is a folder as folderRoleSQL reads it.
+type folderRow struct {
+	id, account    int64
+	role, override string
+}
+
+// folderRows reads every folder's detected role and the role the user gave it.
+func (s *Service) folderRows(ctx context.Context) ([]folderRow, error) {
 	rows, err := s.db.Query(ctx, "SELECT id, account_id, role, role_override FROM folders")
 	if err != nil {
 		return nil, err
 	}
-	hasArchive := map[int64]bool{}
-	for _, r := range rows.Values {
-		if over, role := store.Str(r[3]), store.Str(r[2]); over == "archive" || over == "" && role == "archive" {
-			hasArchive[store.Int(r[1])] = true
-		}
-	}
-	out := make(map[int64]string, len(rows.Values))
-	for _, r := range rows.Values {
-		role := store.Str(r[2])
-		switch over := store.Str(r[3]); {
-		case over != "":
-			role = over
-		case role == "all" && !hasArchive[store.Int(r[1])]:
-			role = "archive"
-		}
-		out[store.Int(r[0])] = role
+	out := make([]folderRow, len(rows.Values))
+	for i, r := range rows.Values {
+		out[i] = folderRow{id: store.Int(r[0]), account: store.Int(r[1]), role: store.Str(r[2]), override: store.Str(r[3])}
 	}
 	return out, nil
+}
+
+// withArchive is the accounts that have an archive folder of their own, so
+// that All Mail never stands in for it.
+func withArchive(folders []folderRow) map[int64]bool {
+	out := map[int64]bool{}
+	for _, f := range folders {
+		if f.override == "archive" || f.override == "" && f.role == "archive" {
+			out[f.account] = true
+		}
+	}
+	return out
+}
+
+// rolesOf is each folder's role as folderRoleSQL gives it, All Mail
+// standing in for archive with no regard to the copies a message has.
+func rolesOf(folders []folderRow) map[int64]string {
+	hasArchive := withArchive(folders)
+	out := make(map[int64]string, len(folders))
+	for _, f := range folders {
+		role := f.role
+		switch {
+		case f.override != "":
+			role = f.override
+		case role == "all" && !hasArchive[f.account]:
+			role = "archive"
+		}
+		out[f.id] = role
+	}
+	return out
+}
+
+// folderRoles is rolesOf every folder.
+func (s *Service) folderRoles(ctx context.Context) (map[int64]string, error) {
+	folders, err := s.folderRows(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return rolesOf(folders), nil
 }
 
 // sentMailRead is how much of the newest sent mail mailPeople reads.
@@ -137,7 +168,6 @@ func (p mailPeople) mine(m *logicalMail) bool { return m.in("sent") || p.own[own
 // are read, never stored, so that the passage of time needs no job. Only those
 // active in the last replyStatusDays days can have one.
 func (s *Service) replyStatuses(ctx context.Context, now int64) (map[int64]replyStatus, error) {
-	cutoff := now - replyStatusDays*86400
 	roles, err := s.folderRoles(ctx)
 	if err != nil {
 		return nil, err
@@ -146,6 +176,13 @@ func (s *Service) replyStatuses(ctx context.Context, now int64) (map[int64]reply
 	if err != nil {
 		return nil, err
 	}
+	return s.replyStatusesWith(ctx, now, roles, people)
+}
+
+// replyStatusesWith is replyStatuses with the folder roles and mailPeople the
+// caller has already read.
+func (s *Service) replyStatusesWith(ctx context.Context, now int64, roles map[int64]string, people mailPeople) (map[int64]replyStatus, error) {
+	cutoff := now - replyStatusDays*86400
 	threads, err := s.logicalMails(ctx, roles, "t.last_date >= ?", cutoff)
 	if err != nil {
 		return nil, err
