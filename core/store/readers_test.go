@@ -356,9 +356,10 @@ func TestUIReadLasts(t *testing.T) {
 }
 
 // Past the WAL limit, with a reader holding a snapshot, the backend's
-// writes wait while the readers drain; the interface still reads (on the
-// writer, a read already waiting for a lane included) and writes; once the reader's statement ends, the WAL is
-// truncated and the writes resume.
+// writes wait while the readers drain. The interface still writes, and
+// reads on the writer, a read already waiting for a lane included, but a
+// long read waits for the drain's end. Once the reader's statement ends,
+// the WAL is truncated and the writes resume.
 func TestWALDrainPausesBackgroundWrites(t *testing.T) {
 	db := openReadersDB(t)
 	p := pool(t, db)
@@ -374,12 +375,18 @@ func TestWALDrainPausesBackgroundWrites(t *testing.T) {
 		held <- err
 	}()
 	require.Eventually(t, func() bool { return len(p[1].lane) == 0 }, 5*time.Second, time.Millisecond)
+	<-p[0].lane // a quick statement runs on reader 0
+	waiting := make(chan error, 1)
+	go func() {
+		_, err := db.Query(ui, "SELECT count(*) FROM t")
+		waiting <- err
+	}()
 	queued := make(chan error, 1)
 	go func() {
 		_, err := db.Query(WithLongRead(ui), "SELECT count(*) FROM t")
 		queued <- err
 	}()
-	time.Sleep(20 * time.Millisecond) // it waits for the long lane
+	time.Sleep(20 * time.Millisecond) // both wait for a lane
 
 	wrote := make(chan error, 1)
 	go func() {
@@ -391,11 +398,12 @@ func TestWALDrainPausesBackgroundWrites(t *testing.T) {
 	}()
 	require.Eventually(t, db.rd.wal.draining.Load, 5*time.Second, time.Millisecond)
 	select {
-	case err := <-queued:
+	case err := <-waiting:
 		require.NoError(t, err, "a read waiting for a lane when the drain starts reads on the writer")
 	case <-time.After(2 * time.Second):
 		t.Fatal("a read waiting for a lane still waits for it during the drain")
 	}
+	p[0].lane <- struct{}{} // the quick statement ends
 	select {
 	case <-wrote:
 		t.Fatal("a background write did not wait for the drain")
@@ -410,8 +418,20 @@ func TestWALDrainPausesBackgroundWrites(t *testing.T) {
 	_, err = db.Execute(quick, "INSERT INTO t(x) VALUES (3)")
 	require.NoError(t, err, "the interface's writes do not wait")
 
+	select {
+	case <-queued:
+		t.Fatal("a long read ran during the drain")
+	case <-time.After(50 * time.Millisecond):
+	}
+
 	cancel()
 	assert.ErrorIs(t, <-held, context.Canceled)
+	select {
+	case err := <-queued:
+		require.NoError(t, err, "a long read runs once the drain ends")
+	case <-time.After(5 * time.Second):
+		t.Fatal("a long read still waits after the drain")
+	}
 	select {
 	case err := <-wrote:
 		require.NoError(t, err)

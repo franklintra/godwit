@@ -314,18 +314,39 @@ func acquire(ctx context.Context, pool []*reader, c readClass, drain <-chan stru
 var _ = [1]struct{}{}[readerCount-2]
 
 // read runs sql on a reader, timed for the SQL trace by the reader that
-// ran it (its wait for a lane included). It returns errDraining, having
-// run nothing, when a WAL drain starts before it has a lane: the caller
-// reads on the writer.
+// ran it (its wait for a lane included). During a WAL drain
+// (readers_wal.go), a long read waits for the drain's end, and any other
+// read returns errDraining, having run nothing, so that the caller reads
+// on the writer: the user waits for those, not for a saved view's count
+// or a sender scan, which on the writer would hold everything else.
 func (rs *readers) read(ctx context.Context, pool []*reader, sql string, args []any) (sqlite.Rows, error) {
 	t := time.Now()
-	r, err := acquire(ctx, pool, rs.class(ctx, sql), rs.wal.started())
-	if err != nil {
-		return sqlite.Rows{}, err
-	}
-	if rs.wal.draining.Load() {
-		r.lane <- struct{}{}
-		return sqlite.Rows{}, errDraining
+	c := rs.class(ctx, sql)
+	var r *reader
+	for r == nil {
+		if done := rs.wal.running(); done != nil {
+			if c != longRead {
+				return sqlite.Rows{}, errDraining
+			}
+			select {
+			case <-done:
+			case <-ctx.Done():
+				return sqlite.Rows{}, ctx.Err()
+			}
+			continue
+		}
+		var err error
+		r, err = acquire(ctx, pool, c, rs.wal.started())
+		if errors.Is(err, errDraining) {
+			continue
+		}
+		if err != nil {
+			return sqlite.Rows{}, err
+		}
+		if rs.wal.draining.Load() { // the drain started as the lane freed
+			r.lane <- struct{}{}
+			r = nil
+		}
 	}
 	run := time.Now()
 	rows, err := r.db.Query(ctx, sql, args...)

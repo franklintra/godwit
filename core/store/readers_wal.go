@@ -24,7 +24,10 @@ import (
 // a drain empties the readers and truncates the WAL:
 //
 //   - new interface reads, and those still waiting for a lane, read on
-//     the writer at once, which the paused writes leave free;
+//     the writer at once, which the paused writes leave free; long reads
+//     (WithLongRead or slow) wait for the drain's end instead, since a
+//     saved view's count or a sender scan on the writer would hold the
+//     reads the user waits for;
 //   - the drain takes both lanes, so it waits only for the statements the
 //     readers are running;
 //   - then PRAGMA wal_checkpoint(TRUNCATE) on the writer copies the WAL
@@ -48,8 +51,7 @@ const (
 	drainRetry = 5 * time.Second
 )
 
-// errDraining tells Query that a drain started while its read waited for
-// a lane: it reads on the writer.
+// errDraining tells Query that a drain runs: it reads on the writer.
 var errDraining = errors.New("store: readers draining")
 
 // walGuard is readers' WAL state.
@@ -61,6 +63,14 @@ type walGuard struct {
 	done       chan struct{}               // closed when the running drain ends; nil: none runs
 	start      chan struct{}               // closed when a drain starts; nil: made by started
 	next       time.Time                   // no size check before
+}
+
+// running returns the running drain's channel, closed when it ends; nil
+// when none runs.
+func (g *walGuard) running() <-chan struct{} {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.done
 }
 
 // started returns a channel closed once a drain runs: the next one's, or

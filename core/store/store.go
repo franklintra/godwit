@@ -72,8 +72,8 @@ func (db *DB) Close() error {
 // a read-only connection; anything else on the writer.
 func (db *DB) Query(ctx context.Context, sql string, args ...any) (sqlite.Rows, error) {
 	if db.rd != nil && isUIRead(ctx) && readOnlySQL(sql) {
-		if pool := db.rd.get(); pool != nil && !db.rd.wal.draining.Load() {
-			if rows, err := db.rd.read(ctx, pool, sql, args); err != errDraining {
+		if pool := db.rd.get(); pool != nil {
+			if rows, err := db.rd.read(ctx, pool, sql, args); !errors.Is(err, errDraining) {
 				return rows, err
 			}
 		}
