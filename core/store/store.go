@@ -21,9 +21,11 @@ import (
 // ErrNewerDatabase is returned when the database was written by a newer Godwit.
 var ErrNewerDatabase = errors.New("store: database schema is newer than this version")
 
-// DB wraps a mygo sqlite connection.
+// DB wraps a mygo sqlite connection, the writer, and read-only
+// connections beside it that Query sends plain SELECTs to (readers.go).
 type DB struct {
 	*sqlite.DB
+	rd      *readers // nil while Open migrates: every call on the writer
 	syncMu  sync.Mutex
 	syncing int
 }
@@ -45,11 +47,30 @@ func Open(ctx context.Context, path string) (*DB, error) {
 		raw.Close()
 		return nil, err
 	}
+	// After init: the schema no longer changes and the WAL exists, which a
+	// read-only connection needs to open.
+	db.rd = &readers{path: path}
 	return db, nil
 }
 
-// Query is sqlite.DB's, timed for perftrace's SQL trace when it is on.
+// Close closes the readers, then the writer.
+func (db *DB) Close() error {
+	var err error
+	if db.rd != nil {
+		err = db.rd.close()
+	}
+	return errors.Join(err, db.DB.Close())
+}
+
+// Query is sqlite.DB's, timed for perftrace's SQL trace when it is on. A
+// plain SELECT runs on a read-only connection (readOnlySQL), anything else
+// on the writer.
 func (db *DB) Query(ctx context.Context, sql string, args ...any) (sqlite.Rows, error) {
+	if db.rd != nil && readOnlySQL(sql) {
+		if pool := db.rd.get(); pool != nil {
+			return db.rd.read(ctx, pool, sql, args)
+		}
+	}
 	if !perftrace.SQLOn() {
 		return db.DB.Query(ctx, sql, args...)
 	}
