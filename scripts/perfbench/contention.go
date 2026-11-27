@@ -88,14 +88,7 @@ func runContention(ctx context.Context, o *opener, mail *loopMail, nmsg, boots i
 		}()
 		return nil
 	}
-	if err := loop("perfbench-tray", time.Second, func(c *uiclient.Client) {
-		c.GetSettings(ctx)
-		accs, _ := c.ListAccounts(ctx)
-		for _, a := range accs {
-			c.ListFolders(ctx, a.ID)
-		}
-		c.RecentSignInCodes(ctx, time.Now())
-	}); err != nil {
+	if err := loop("perfbench-tray", time.Second, func(c *uiclient.Client) { trayRound(ctx, c) }); err != nil {
 		return err
 	}
 	if err := loop("perfbench-probe", 250*time.Millisecond, func(c *uiclient.Client) {
