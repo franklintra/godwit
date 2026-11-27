@@ -135,7 +135,7 @@ func (s *Service) ThreadDeadline(ctx context.Context, threadID int64) (ReaderDea
 	}
 	defer end()
 	now := s.userNow(ctx)
-	statuses, err := s.replyStatuses(ctx, now.Unix())
+	statuses, err := s.threadReplyStatuses(ctx, now.Unix(), threadID) // the reader asks on every message it opens
 	if err != nil {
 		return ReaderDeadline{}, err
 	}
@@ -189,7 +189,7 @@ func (s *Service) deadlineWrites(ctx context.Context, source string, threadID in
 		return nil, ErrDeadlineInvalid
 	}
 	now := s.userNow(ctx)
-	statuses, err := s.replyStatuses(ctx, now.Unix())
+	statuses, err := s.threadReplyStatuses(ctx, now.Unix(), threadID)
 	if err != nil {
 		return nil, err
 	}
@@ -386,11 +386,11 @@ func (s *Service) mergedReplyDate(ctx context.Context, threads []int64) (int64, 
 	if err != nil {
 		return 0, err
 	}
-	marks, err := s.archiveMarks(ctx)
+	marks, err := s.archiveMarks(ctx, threads)
 	if err != nil {
 		return 0, err
 	}
-	replied, err := s.repliedAt(ctx)
+	replied, err := s.repliedAt(ctx, threads)
 	if err != nil {
 		return 0, err
 	}
@@ -470,7 +470,7 @@ func (s *Service) CountAppAndWitDeadlines(ctx context.Context) (int, error) {
 		ids[i] = store.Int(r[0])
 	}
 	now := s.userNow(ctx)
-	statuses, err := s.replyStatuses(ctx, now.Unix())
+	statuses, err := s.threadReplyStatuses(ctx, now.Unix(), ids...)
 	if err != nil {
 		return 0, err
 	}

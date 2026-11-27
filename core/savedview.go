@@ -277,15 +277,24 @@ type viewEval struct {
 	replyDates string // the 期限's version (meta reply_dates_version), bumped by every write
 	// deadlines is the 期限 in effect by conversation, removal markers included.
 	deadlines map[int64]Deadline
+	roles     map[int64]string // rolesOf folders
+	people    mailPeople       // read once for the statuses, wrote and fillRecipients
 }
 
 func (s *Service) newViewEval(ctx context.Context) (*viewEval, error) {
 	now := s.clk().Now().Unix()
-	statuses, err := s.replyStatuses(ctx, now)
+	// The folders and mailPeople are read once here and handed on: the sent
+	// mail scan behind mailPeople is the dearest read of the eval.
+	folders, err := s.folderRows(ctx)
 	if err != nil {
 		return nil, err
 	}
-	roles, err := s.folderRoles(ctx)
+	roles := rolesOf(folders)
+	people, err := s.mailPeople(ctx, roles)
+	if err != nil {
+		return nil, err
+	}
+	statuses, err := s.replyStatusesWith(ctx, now, roles, people)
 	if err != nil {
 		return nil, err
 	}
@@ -304,10 +313,6 @@ func (s *Service) newViewEval(ctx context.Context) (*viewEval, error) {
 	notIn := notPurgedCond
 	if len(out) > 0 {
 		notIn += " AND NOT " + shownIn("("+strings.Join(out, ",")+")")
-	}
-	people, err := s.mailPeople(ctx, roles)
-	if err != nil {
-		return nil, err
 	}
 	addrs := make([]string, 0, len(people.known)+len(people.own))
 	for a := range people.known {
@@ -331,7 +336,8 @@ func (s *Service) newViewEval(ctx context.Context) (*viewEval, error) {
 	if len(version.Values) > 0 {
 		replyDates = store.Str(version.Values[0][0])
 	}
-	e := &viewEval{now: now, statuses: statuses, notIn: notIn, unread: unread, wrote: wrote, wroteTo: string(list), today: s.userNow(ctx), replyDates: replyDates}
+	e := &viewEval{now: now, statuses: statuses, notIn: notIn, unread: unread, wrote: wrote, wroteTo: string(list), today: s.userNow(ctx), replyDates: replyDates,
+		roles: roles, people: people}
 	rows, err := s.db.Query(ctx, "SELECT thread_id FROM thread_deadlines")
 	if err != nil {
 		return nil, err
@@ -697,14 +703,7 @@ func (s *Service) fillRecipients(ctx context.Context, e *viewEval, items []Threa
 	if len(items) == 0 {
 		return nil
 	}
-	roles, err := s.folderRoles(ctx)
-	if err != nil {
-		return err
-	}
-	people, err := s.mailPeople(ctx, roles)
-	if err != nil {
-		return err
-	}
+	roles, people := e.roles, e.people
 	args := make([]any, len(items))
 	for i, t := range items {
 		args[i] = t.ID
@@ -1161,7 +1160,7 @@ func (s *Service) archiveMarkWrites(ctx context.Context, marks map[int64]archive
 	if len(marks) == 0 {
 		return nil, nil, nil
 	}
-	had, err := s.archiveMarks(ctx)
+	had, err := s.archiveMarks(ctx, slices.Collect(maps.Keys(marks)))
 	if err != nil {
 		return nil, nil, err
 	}
