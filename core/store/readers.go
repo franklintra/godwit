@@ -54,17 +54,43 @@ const (
 
 type uiReadKey struct{}
 
+// uiMark is WithUIRead's value: the life of the interface's connection,
+// or off (WithoutUIRead).
+type uiMark struct {
+	done <-chan struct{} // closed when the connection ends; nil: never
+	off  bool
+}
+
 // WithUIRead marks ctx as serving Godwit's own interface: its plain
 // SELECTs run on the read-only connections and never wait for the
 // backend's writes or reads. The core marks every RoleUI connection's
-// context.
+// context. The mark lasts as long as ctx: work detached from it with
+// context.WithoutCancel keeps the mark while the connection lives and
+// reads on the writer once it has ended.
 func WithUIRead(ctx context.Context) context.Context {
-	return context.WithValue(ctx, uiReadKey{}, true)
+	return context.WithValue(ctx, uiReadKey{}, uiMark{done: ctx.Done()})
+}
+
+// WithoutUIRead takes the mark off ctx: work an interface call starts
+// but that is the backend's own, such as a Wit run, reads on the writer.
+func WithoutUIRead(ctx context.Context) context.Context {
+	if !isUIRead(ctx) {
+		return ctx
+	}
+	return context.WithValue(ctx, uiReadKey{}, uiMark{off: true})
 }
 
 func isUIRead(ctx context.Context) bool {
-	ui, _ := ctx.Value(uiReadKey{}).(bool)
-	return ui
+	m, ok := ctx.Value(uiReadKey{}).(uiMark)
+	if !ok || m.off {
+		return false
+	}
+	select {
+	case <-m.done:
+		return false
+	default:
+		return true
+	}
 }
 
 type longReadKey struct{}

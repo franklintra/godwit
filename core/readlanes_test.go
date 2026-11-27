@@ -88,3 +88,31 @@ func TestInterfaceScansLeaveTheQuickLane(t *testing.T) {
 	_, err = e.s.SavedViews(short)
 	assert.ErrorIs(t, err, context.DeadlineExceeded, "SavedViews queues for the long lane")
 }
+
+// Work detached from an interface call reads on the readers only while
+// the connection lives, and a Wit run, the backend's work, never does.
+func TestDetachedInterfaceWorkLeavesTheReaders(t *testing.T) {
+	e := newSyncEnv(t)
+	conn, end := context.WithCancel(t.Context())
+	ui := WithUISession(conn, e.s)
+	call, done := context.WithCancel(ui)
+	detached := context.WithoutCancel(call)
+	done()
+
+	hold(t, e.s, bg) // a background scan on the writer
+	quick, stop := context.WithTimeout(detached, 3*time.Second)
+	defer stop()
+	_, err := e.s.ListAccounts(quick)
+	require.NoError(t, err, "the connection lives: a reader")
+
+	writer := func(ctx context.Context, name string) {
+		t.Helper()
+		short, stop := context.WithTimeout(ctx, 200*time.Millisecond)
+		defer stop()
+		_, err := e.s.ListAccounts(short)
+		assert.ErrorIs(t, err, context.DeadlineExceeded, "%s: waits for the writer", name)
+	}
+	writer(runCaller(ui), "a Wit run")
+	end()
+	writer(detached, "the connection gone")
+}

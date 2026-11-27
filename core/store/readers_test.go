@@ -334,3 +334,22 @@ func TestLongInterfaceReadLeavesTheQuickLane(t *testing.T) {
 	}
 	assert.Len(t, p[1].lane, 1, "the lane is free again")
 }
+
+// The interface's mark lives as long as the context that set it: work
+// detached with context.WithoutCancel reads on a reader while the
+// connection lives and on the writer after; WithoutUIRead drops it.
+func TestUIReadLasts(t *testing.T) {
+	assert.False(t, isUIRead(t.Context()))
+	assert.True(t, isUIRead(WithUIRead(context.Background())), "a context that never ends")
+	conn, end := context.WithCancel(t.Context())
+	ui := WithUIRead(conn)
+	call, done := context.WithCancel(ui)
+	detached := context.WithoutCancel(call)
+	done()
+	assert.True(t, isUIRead(detached), "the call ended, the connection lives")
+	assert.False(t, isUIRead(WithoutUIRead(detached)))
+	assert.False(t, isUIRead(WithoutUIRead(t.Context())))
+	end()
+	assert.False(t, isUIRead(detached), "the connection ended")
+	assert.False(t, isUIRead(ui))
+}

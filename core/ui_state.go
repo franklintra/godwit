@@ -20,7 +20,8 @@ type uiSession struct {
 
 // WithUISession binds a fresh UI session to ctx's lifetime for a RoleUI
 // connection; cancelling ctx clears the session's foreground and compose state.
-// Its reads take the interface's own database connections (store.WithUIRead).
+// Its reads take the interface's own database connections (store.WithUIRead)
+// while the connection lives, detached work included.
 func WithUISession(ctx context.Context, s *Service) context.Context {
 	sess := &uiSession{}
 	s.uiMu.Lock()
@@ -262,7 +263,9 @@ func (s *Service) SetComposeOpen(ctx context.Context, draftIDs []int64) error {
 // it with their ctx.
 func runCaller(ctx context.Context) context.Context {
 	if uiSessionFromContext(ctx) != nil {
-		return context.WithoutCancel(ctx)
+		// The run is the backend's work, not the window's: its reads take
+		// the writer (store.WithoutUIRead), as a godwit mcp agent's do.
+		return store.WithoutUIRead(context.WithoutCancel(ctx))
 	}
 	return ctx
 }
