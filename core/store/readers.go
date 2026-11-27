@@ -14,15 +14,19 @@ import (
 	"github.com/godwit-email/godwit/internal/perftrace"
 )
 
-// Reads on read-only connections beside the writer (ADR 0052).
+// The interface's reads on read-only connections beside the writer
+// (ADR 0052).
 //
 // mygo's sqlite.DB runs one operation at a time, so on a single connection
-// a sub-millisecond read waits behind every long statement before it: a
-// saved view's scan, a sync round's whole-folder SELECT. The database is in
-// WAL mode, where readers on other connections run beside the writer and
-// see every committed transaction, so DB.Query sends plain SELECTs to a
-// small pool of read-only connections. Everything else (writes, PRAGMAs,
-// WITH, RETURNING, connection-bound functions) stays on the writer.
+// the interface's sub-millisecond reads waited behind every long statement
+// before them: a sync round's batch, the labeler's scan, a saved view's
+// count. The database is in WAL mode, where readers on other connections
+// run beside the writer and see every committed transaction, so DB.Query
+// sends the interface's plain SELECTs (a ctx marked by WithUIRead) to two
+// read-only connections. Everything else stays on the writer: writes,
+// PRAGMAs, WITH, RETURNING, connection-bound functions, and every read of
+// the backend's own work, which keeps the one connection it always had and
+// so takes no more CPU from the interface than before.
 //
 // mygo has no interactive transaction (Transaction is one batch under
 // BEGIN IMMEDIATE, and Query refuses BEGIN), so a write has committed by the
@@ -31,26 +35,29 @@ import (
 
 const (
 	// readerCount is the pool's size: reader 0 is the interface's quick
-	// lane, reader 1 its lane for long reads, reader 2 is shared with
-	// background reads (acquire).
-	readerCount = 3
-	// slowRead is the run time from which a statement counts as long: its
-	// next runs stay off the quick lane.
-	slowRead = 100 * time.Millisecond
+	// lane, reader 1 its long lane (acquire).
+	readerCount = 2
+	// slowRead is the run time from which an unmarked statement counts as
+	// long: its next runs stay off the quick lane.
+	slowRead = 250 * time.Millisecond
 	// maxTimed bounds the table of statement run times.
 	maxTimed = 256
 	// readerBusyTimeout bounds a reader's wait for a lock. In WAL a reader
 	// waits only while the WAL index is being rebuilt or reset.
 	readerBusyTimeout = 5 * time.Second
-	// readerMmapSize is PRAGMA mmap_size on the readers (0: off).
-	readerMmapSize = 0
+	// readerCacheKiB is PRAGMA cache_size on each reader, in KiB (SQLite's
+	// default is 2,000). Under a sync the writer changes the database every
+	// few milliseconds and a reader drops its cache at each change, so a
+	// larger one holds memory, not hits; the OS page cache serves the rest.
+	readerCacheKiB = 1024
 )
 
 type uiReadKey struct{}
 
-// WithUIRead marks ctx as serving Godwit's own interface: its reads take
-// the interface's reader lanes and never queue behind background reads
-// while a lane is free. The core marks every RoleUI connection's context.
+// WithUIRead marks ctx as serving Godwit's own interface: its plain
+// SELECTs run on the read-only connections and never wait for the
+// backend's writes or reads. The core marks every RoleUI connection's
+// context.
 func WithUIRead(ctx context.Context) context.Context {
 	return context.WithValue(ctx, uiReadKey{}, true)
 }
@@ -60,17 +67,32 @@ func isUIRead(ctx context.Context) bool {
 	return ui
 }
 
+type longReadKey struct{}
+
+// WithLongRead marks ctx's reads as scans (a saved view's placement, the
+// reply statuses, the contacts): on the interface's connections they take
+// the long lane only, so they never hold the quick lane that a thread or a
+// list waits for, from their first run on.
+func WithLongRead(ctx context.Context) context.Context {
+	return context.WithValue(ctx, longReadKey{}, true)
+}
+
+func isLongRead(ctx context.Context) bool {
+	long, _ := ctx.Value(longReadKey{}).(bool)
+	return long
+}
+
 // reader is one read-only connection and its lane: a one-slot semaphore
 // held while a statement runs, so a caller can see the connection is busy
 // without queueing on it.
 type reader struct {
 	db   *sqlite.DB
 	lane chan struct{}
-	kind string // the SQL trace's kind: "q@r0", "q@r1", ...
+	kind string // the SQL trace's kind: "q@r0", "q@r1"
 }
 
 // readers is DB's pool. It opens on the first routed read, not in Open:
-// a caller that never reads through DB.Query, such as the dev database
+// a caller that never reads for the interface, such as the dev database
 // copy that switches to journal_mode = DELETE (core/devsync.go), which
 // needs no other connection open, never has readers.
 type readers struct {
@@ -83,29 +105,26 @@ type readers struct {
 	timed  map[string]bool // statement text: its last run took slowRead or more
 }
 
-// readClass is what acquire knows of a read: whose it is and, from the
-// statement's last run, whether it is long.
+// readClass is what acquire knows of an interface read.
 type readClass int
 
 const (
-	backgroundRead readClass = iota
-	quickRead                // the interface's, last run under slowRead
-	newRead                  // the interface's, not run yet (or forgotten)
-	longRead                 // the interface's, last run slowRead or more
+	quickRead readClass = iota // not marked long, and its last run (if any) under slowRead
+	longRead                   // marked by WithLongRead, or its last run slowRead or more
 )
 
-// class is ctx and sql's readClass.
+// class is ctx and sql's readClass. A statement not run yet is quick
+// unless marked: the scans the interface starts are marked, so at a cold
+// start, when no statement has a run time, they still keep off the quick
+// lane.
 func (rs *readers) class(ctx context.Context, sql string) readClass {
-	if !isUIRead(ctx) {
-		return backgroundRead
+	if isLongRead(ctx) {
+		return longRead
 	}
 	rs.timeMu.Lock()
-	slow, ok := rs.timed[sql]
+	slow := rs.timed[sql]
 	rs.timeMu.Unlock()
-	switch {
-	case !ok:
-		return newRead
-	case slow:
+	if slow {
 		return longRead
 	}
 	return quickRead
@@ -166,10 +185,8 @@ func openReaders(path string) ([]*reader, error) {
 		r := &reader{db: db, lane: make(chan struct{}, 1), kind: "q@r" + strconv.Itoa(i)}
 		r.lane <- struct{}{}
 		pool = append(pool, r)
-		if readerMmapSize > 0 {
-			if _, err := db.Query(ctx, "PRAGMA mmap_size = "+strconv.Itoa(readerMmapSize)); err != nil {
-				return fail(err)
-			}
+		if _, err := db.Query(ctx, "PRAGMA cache_size = -"+strconv.Itoa(readerCacheKiB)); err != nil {
+			return fail(err)
 		}
 	}
 	return pool, nil
@@ -194,68 +211,43 @@ func (rs *readers) close() error {
 // acquire takes a reader for a read of class c and returns it; the
 // caller gives its lane back.
 //
-// A background read waits for the shared reader (2) alone. The
-// interface's reads never wait behind a background read while one of
-// their lanes is free, and a long one never takes the quick lane (0):
-// saved views run statements of seconds, several refreshes of them can
-// overlap at launch, and on a cold page cache every lane they can take
-// stays busy for seconds, so a sub-millisecond ListAccounts waited 4 s
-// for a reader. A quick read takes the quick lane first; a read not run
-// yet prefers the other two, so a long statement's first run lands on
-// the quick lane only when they are both busy.
+// A long read waits for the long lane (1) alone: saved views, reply
+// statuses and contacts run statements of tenths of seconds to seconds,
+// the window restarts SavedViews on every mail event during a sync, and
+// a reader message's ThreadDeadline scans each time. A quick read takes
+// the quick lane (0) first, the long lane when it is free, and otherwise
+// whichever frees first, so it waits at most for one quick statement or
+// for the long one in progress, never for a queue of scans.
 func acquire(ctx context.Context, pool []*reader, c readClass) (*reader, error) {
-	var order []*reader
-	switch c {
-	case backgroundRead:
-		order = []*reader{pool[2]}
-	case quickRead:
-		order = []*reader{pool[0], pool[1], pool[2]}
-	case newRead:
-		order = []*reader{pool[1], pool[2], pool[0]}
-	default:
-		order = []*reader{pool[1], pool[2]}
+	quick, long := pool[0], pool[1]
+	if c == longRead {
+		select {
+		case <-long.lane:
+			return long, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
-	for _, r := range order {
+	for _, r := range []*reader{quick, long} {
 		select {
 		case <-r.lane:
 			return r, nil
 		default:
 		}
 	}
-	// None is free: wait for whichever frees first.
-	switch len(order) {
-	case 1:
-		select {
-		case <-order[0].lane:
-			return order[0], nil
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	case 2:
-		select {
-		case <-order[0].lane:
-			return order[0], nil
-		case <-order[1].lane:
-			return order[1], nil
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
 	select {
-	case <-order[0].lane:
-		return order[0], nil
-	case <-order[1].lane:
-		return order[1], nil
-	case <-order[2].lane:
-		return order[2], nil
+	case <-quick.lane:
+		return quick, nil
+	case <-long.lane:
+		return long, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
 }
 
-// acquire names the three readers: a compile error here means it must
+// acquire names the two readers: a compile error here means it must
 // change with readerCount.
-var _ = [1]struct{}{}[readerCount-3]
+var _ = [1]struct{}{}[readerCount-2]
 
 // read runs sql on a reader, timed for the SQL trace by the reader that
 // ran it (its wait for a lane included).

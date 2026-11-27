@@ -22,7 +22,8 @@ import (
 var ErrNewerDatabase = errors.New("store: database schema is newer than this version")
 
 // DB wraps a mygo sqlite connection, the writer, and read-only
-// connections beside it that Query sends plain SELECTs to (readers.go).
+// connections beside it that Query sends the interface's plain SELECTs to
+// (readers.go).
 type DB struct {
 	*sqlite.DB
 	rd      *readers // nil while Open migrates: every call on the writer
@@ -62,11 +63,11 @@ func (db *DB) Close() error {
 	return errors.Join(err, db.DB.Close())
 }
 
-// Query is sqlite.DB's, timed for perftrace's SQL trace when it is on. A
-// plain SELECT runs on a read-only connection (readOnlySQL), anything else
-// on the writer.
+// Query is sqlite.DB's, timed for perftrace's SQL trace when it is on. An
+// interface read (WithUIRead) that is a plain SELECT (readOnlySQL) runs on
+// a read-only connection; anything else on the writer.
 func (db *DB) Query(ctx context.Context, sql string, args ...any) (sqlite.Rows, error) {
-	if db.rd != nil && readOnlySQL(sql) {
+	if db.rd != nil && isUIRead(ctx) && readOnlySQL(sql) {
 		if pool := db.rd.get(); pool != nil {
 			return db.rd.read(ctx, pool, sql, args)
 		}
