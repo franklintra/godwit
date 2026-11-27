@@ -125,7 +125,11 @@ func (a *App) setRoute(r Route) {
 	}
 	a.route = r
 	a.gen++
-	a.page().refresh(nil)
+	if r.Page == PageMail {
+		a.mail.switchView()
+	} else {
+		a.page().refresh(nil)
+	}
 }
 
 // onEvent notes ev for the next refresh, at most one per refreshEvery; sync
@@ -222,6 +226,9 @@ func (a *App) refresh(dirty []events.Event) {
 			a.page().refresh(dirty)
 		}
 		return // onEvent 已刷新阅读器的 Skill，隐藏状态也包含在内。
+	}
+	if a.route.Page != PageMail {
+		a.mail.missed = true // its list is not read: the way back reads it
 	}
 	if a.countsLater(dirty) {
 		a.countsOwed = true

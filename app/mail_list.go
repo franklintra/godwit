@@ -171,12 +171,13 @@ type mailPage struct {
 	listViews  bool // the list run in flight reads them
 
 	// The folders, outbox and starred counts are read by a list run when
-	// countsDue says so; a refresh whose counts wait (App.countsLater)
-	// leaves them, and the run reads the list alone with what was read
-	// before.
+	// countsDue says so; a refresh whose counts wait (App.countsLater) and
+	// a view switch with nothing owed leave them, and the run reads the
+	// list alone with what was read before.
 	countsDue   bool
 	countsKnown bool // a list run has read them
 	rowsDue     bool // a refresh whose counts wait: a view's rows are read without the views
+	missed      bool // a refresh came while another page showed: the next switch here reads everything
 
 	exec       func(ctx context.Context, op string, ids []int64, from, folder int64) (core.ArchiveUndo, error) // write; tests wrap it
 	fetched    func()                                                                                          // tests: runs off the UI thread once a reload has read the list
@@ -307,6 +308,24 @@ func (p *mailPage) refreshList() {
 	p.reader.sync(true)
 }
 
+// switchView follows a route change. A saved view's switch reads the views
+// at once (it may be gone; its counts show beside it), as does the outbox's,
+// whose list is the outbox; another view reads its list alone when the
+// counts are as new as the last mail change (none owed): they are the same
+// in every view.
+func (p *mailPage) switchView() {
+	v := p.shownView()
+	_, viewList := savedViewOf(v)
+	fresh := p.countsKnown && p.viewsKnown && !p.missed && !p.a.countsOwed && !viewList && v.Unified != "outbox" && v.Unified != "scheduled"
+	p.missed = false
+	if !fresh {
+		p.refresh(nil)
+		return
+	}
+	p.reloadList(true)
+	p.reader.sync(true)
+}
+
 // reloadLater notes a reload that waits for a read in flight: the views are
 // marked to read again unless cached says the change leaves them as they
 // are. A search reruns at once, as it did before the wait.
@@ -343,7 +362,7 @@ func (p *mailPage) reloadList(cached bool) {
 	}
 	want, toEnd := len(p.items), p.cursor == "" && len(p.items) > 0
 	savedViewID, viewList := savedViewOf(v)
-	if !cached || reset || !p.viewsKnown && !p.viewsPending() {
+	if !cached || reset && viewList || !p.viewsKnown && !p.viewsPending() {
 		p.viewsStale = true
 	}
 	counts := p.countsDue || !p.countsKnown || snap != nil

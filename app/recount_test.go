@@ -165,6 +165,52 @@ func TestCountsAtOnceForNewAccount(t *testing.T) {
 	}
 }
 
+// A switch to another view reads its list alone when nothing is owed; to a
+// saved view, it reads the views at once; with counts owed, it reads them.
+func TestViewSwitchCounts(t *testing.T) {
+	h, svc, acc := countsHarness(t)
+	before := svc.reads()
+	h.app.navigate(Route{Page: PageMail, View: core.View{FolderID: h.folderOf(acc, "inbox").ID}})
+	h.until("the folder's list", func() bool { return idle(h) })
+	if got := svc.reads().since(before); got != (reads{list: 1}) {
+		t.Fatalf("a folder switch read %+v, want the list alone", got)
+	}
+	if !h.tt.HasText("hello 0") {
+		t.Fatalf("the folder misses its row; texts %q", h.tt.Texts())
+	}
+
+	id, err := h.env.Svc.SaveView(context.Background(), core.SavedView{Name: "Bob", Icon: "team", Doc: core.SavedViewDoc{Match: core.MatchAll,
+		Conditions: []core.RuleCondition{{Field: core.FieldFrom, Op: core.OpContains, Value: "bob"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.waitMail("the view", func() bool {
+		return idle(h) && slices.ContainsFunc(h.app.mail.views, func(b core.SavedView) bool { return b.ID == id })
+	})
+	before = svc.reads()
+	h.app.navigate(Route{Page: PageMail, View: savedRoute(id)})
+	h.until("the view's rows", func() bool { return idle(h) })
+	if got := svc.reads().since(before); got.saved != 1 {
+		t.Fatalf("a saved view's switch read %+v, want the views at once", got)
+	}
+	if len(h.app.mail.items) != 1 {
+		t.Fatalf("the view lists %+v", h.app.mail.items)
+	}
+
+	h.app.navigate(Route{Page: PageMail, View: core.View{Unified: "inbox"}})
+	h.until("the inbox", func() bool { return idle(h) })
+	mailEvent(h, acc.ID) // within countsEvery of the last read: owed
+	if !h.app.countsOwed {
+		t.Fatal("the counts did not wait")
+	}
+	before = svc.reads()
+	h.app.navigate(Route{Page: PageMail, View: core.View{Unified: "starred"}})
+	h.until("starred", func() bool { return idle(h) })
+	if got := svc.reads().since(before); got.starred != 1 || got.saved != 1 {
+		t.Fatalf("a switch with counts owed read %+v, want them", got)
+	}
+}
+
 // In a saved view, a sync's event reads the view's rows again, without
 // the views' counts.
 func TestSavedViewRowsDuringBurst(t *testing.T) {
