@@ -189,16 +189,48 @@ func (s *Service) replyStatuses(ctx context.Context, now int64) (map[int64]reply
 // replyStatusesWith is replyStatuses with the folder roles and mailPeople the
 // caller has already read.
 func (s *Service) replyStatusesWith(ctx context.Context, now int64, roles map[int64]string, people mailPeople) (map[int64]replyStatus, error) {
+	return s.replyStatusesOf(ctx, now, roles, people, nil)
+}
+
+// threadReplyStatuses is replyStatuses of threadIDs only, as replyStatuses
+// has them: a conversation's status reads its own mail, archive mark and
+// replies, and mailPeople. The reader asks it for every message it opens,
+// so it must not read the whole mailbox.
+func (s *Service) threadReplyStatuses(ctx context.Context, now int64, threadIDs ...int64) (map[int64]replyStatus, error) {
+	if len(threadIDs) == 0 {
+		return map[int64]replyStatus{}, nil
+	}
+	roles, err := s.folderRoles(ctx)
+	if err != nil {
+		return nil, err
+	}
+	people, err := s.mailPeople(ctx, roles)
+	if err != nil {
+		return nil, err
+	}
+	return s.replyStatusesOf(ctx, now, roles, people, threadIDs)
+}
+
+// replyStatusesOf is replyStatusesWith of the conversations in (nil: every
+// one).
+func (s *Service) replyStatusesOf(ctx context.Context, now int64, roles map[int64]string, people mailPeople, in []int64) (map[int64]replyStatus, error) {
 	cutoff := now - replyStatusDays*86400
-	threads, err := s.logicalMails(ctx, roles, "t.last_date >= ?", cutoff)
+	cond, args := "t.last_date >= ?", []any{cutoff}
+	if in != nil {
+		// Driven from the threads by id, then messages_thread: the date
+		// condition holds for all of a conversation's mail or none, as in
+		// the full read.
+		cond, args = "t.id IN (SELECT value FROM json_each(?)) AND "+cond, []any{intList(in), cutoff}
+	}
+	threads, err := s.logicalMails(ctx, roles, cond, args...)
 	if err != nil {
 		return nil, err
 	}
-	marks, err := s.archiveMarks(ctx)
+	marks, err := s.archiveMarks(ctx, in)
 	if err != nil {
 		return nil, err
 	}
-	repliedAt, err := s.repliedAt(ctx)
+	repliedAt, err := s.repliedAt(ctx, in)
 	if err != nil {
 		return nil, err
 	}
@@ -231,9 +263,7 @@ func (s *Service) replyStatusesWith(ctx context.Context, now int64, roles map[in
 // logicalMails is the mail of the conversations whose messages m (joined to
 // their thread t) meet cond, by conversation.
 func (s *Service) logicalMails(ctx context.Context, roles map[int64]string, cond string, args ...any) (map[int64]map[string]*logicalMail, error) {
-	rows, err := s.db.Query(ctx, `SELECT m.thread_id, m.id, COALESCE(m.message_id, ''), COALESCE(m.date, 0), m.from_addr, m.to_addrs, m.cc_addrs, m.reply_to,
-		m.list_id, m.list_unsubscribe, m.auto_submitted, m.precedence, m.flags, `+shownFolders+` FROM messages m JOIN threads t ON t.id = m.thread_id
-		WHERE `+cond+` AND `+notPurgedCond+` ORDER BY m.id`, args...)
+	rows, err := s.db.Query(ctx, logicalMailsSQL(cond), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -258,10 +288,28 @@ func (s *Service) logicalMails(ctx context.Context, roles map[int64]string, cond
 	return threads, nil
 }
 
-// repliedAt is, by conversation, when a reply was last queued here (not failed).
-func (s *Service) repliedAt(ctx context.Context) (map[int64]int64, error) {
+// logicalMailsSQL is the query logicalMails runs with cond.
+func logicalMailsSQL(cond string) string {
+	return `SELECT m.thread_id, m.id, COALESCE(m.message_id, ''), COALESCE(m.date, 0), m.from_addr, m.to_addrs, m.cc_addrs, m.reply_to,
+		m.list_id, m.list_unsubscribe, m.auto_submitted, m.precedence, m.flags, ` + shownFolders + ` FROM messages m JOIN threads t ON t.id = m.thread_id
+		WHERE ` + cond + ` AND ` + notPurgedCond + ` ORDER BY m.id`
+}
+
+// threadsIn is the condition that column col is one of threads (nil: no
+// condition, "1"), and its arguments.
+func threadsIn(col string, threads []int64) (string, []any) {
+	if threads == nil {
+		return "1", nil
+	}
+	return col + " IN (SELECT value FROM json_each(?))", []any{intList(threads)}
+}
+
+// repliedAt is, by conversation of threads (nil: every one), when a reply was
+// last queued here (not failed).
+func (s *Service) repliedAt(ctx context.Context, threads []int64) (map[int64]int64, error) {
+	in, args := threadsIn("r.thread_id", threads)
 	replied, err := s.db.Query(ctx, `SELECT r.thread_id, max(r.at) FROM reply_records r LEFT JOIN outbox o ON o.id = r.outbox_id
-		WHERE COALESCE(o.state, '') != 'failed' GROUP BY r.thread_id`)
+		WHERE `+in+` AND COALESCE(o.state, '') != 'failed' GROUP BY r.thread_id`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -419,8 +467,11 @@ type archiveMark struct {
 	ver  int64 // the 期限's version the archive moved to, 0 for marks older than that
 }
 
-func (s *Service) archiveMarks(ctx context.Context) (map[int64]archiveMark, error) {
-	rows, err := s.db.Query(ctx, "SELECT thread_id, message_id_hdr, date, archived_at, archived_version FROM archive_marks")
+// archiveMarks is the archive mark of each conversation of threads (nil:
+// every one) that has one.
+func (s *Service) archiveMarks(ctx context.Context, threads []int64) (map[int64]archiveMark, error) {
+	in, args := threadsIn("thread_id", threads)
+	rows, err := s.db.Query(ctx, "SELECT thread_id, message_id_hdr, date, archived_at, archived_version FROM archive_marks WHERE "+in, args...)
 	if err != nil {
 		return nil, err
 	}

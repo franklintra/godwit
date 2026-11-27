@@ -112,7 +112,7 @@ func (s *Service) writeReplyBy(ctx context.Context, text string, items []mailIte
 	rows, err := s.db.Query(ctx, "SELECT thread_id FROM messages WHERE id = ?", items[0].MessageID)
 	var statuses map[int64]replyStatus
 	if err == nil && len(rows.Values) > 0 {
-		statuses, err = s.replyStatuses(ctx, s.userNow(ctx).Unix())
+		statuses, err = s.threadReplyStatuses(ctx, s.userNow(ctx).Unix(), store.Int(rows.Values[0][0]))
 	}
 	if err == nil && len(rows.Values) > 0 {
 		tid := store.Int(rows.Values[0][0])

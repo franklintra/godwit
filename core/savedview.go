@@ -1160,7 +1160,7 @@ func (s *Service) archiveMarkWrites(ctx context.Context, marks map[int64]archive
 	if len(marks) == 0 {
 		return nil, nil, nil
 	}
-	had, err := s.archiveMarks(ctx)
+	had, err := s.archiveMarks(ctx, slices.Collect(maps.Keys(marks)))
 	if err != nil {
 		return nil, nil, err
 	}
