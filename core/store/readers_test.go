@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -113,48 +114,81 @@ func TestWriteOnAReaderFails(t *testing.T) {
 func TestAcquireLanes(t *testing.T) {
 	db := openReadersDB(t)
 	p := pool(t, db)
-	ui, bg := WithUIRead(t.Context()), t.Context()
-	take := func(ctx context.Context) *reader {
+	ctx := t.Context()
+	take := func(c readClass) *reader {
 		t.Helper()
-		r, err := acquire(ctx, p)
+		r, err := acquire(ctx, p, c)
 		require.NoError(t, err)
 		return r
 	}
 	give := func(r *reader) { r.lane <- struct{}{} }
+	busy := func(c readClass) {
+		t.Helper()
+		short, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+		defer cancel()
+		_, err := acquire(short, p, c)
+		assert.ErrorIs(t, err, context.DeadlineExceeded)
+	}
 
-	r := take(bg)
+	r := take(backgroundRead)
 	assert.Same(t, p[2], r, "background reads use the shared reader")
 	give(r)
+	r = take(quickRead)
+	assert.Same(t, p[0], r, "a quick read takes the quick lane first")
+	give(r)
+	r = take(newRead)
+	assert.Same(t, p[1], r, "a new read leaves the quick lane to quick ones")
+	give(r)
 
-	r0 := take(ui)
-	assert.Same(t, p[0], r0)
-	r1 := take(ui)
-	assert.Same(t, p[1], r1, "a busy interface lane: the other one")
-	shared := take(ui)
-	assert.Same(t, p[2], shared, "both interface lanes busy: the free shared reader")
+	l1, l2 := take(longRead), take(longRead)
+	assert.Same(t, p[1], l1)
+	assert.Same(t, p[2], l2, "both long lanes taken: the free shared reader")
+	busy(longRead) // a long read never takes the quick lane
+	busy(backgroundRead)
+	q := take(quickRead)
+	assert.Same(t, p[0], q, "long reads leave the quick lane free")
+	busy(quickRead)
+	busy(newRead)
+	give(q)
+	n := take(newRead)
+	assert.Same(t, p[0], n, "a new read takes the quick lane when it is the only free one")
 
-	short, cancel := context.WithTimeout(bg, 50*time.Millisecond)
-	defer cancel()
-	give(r0)
-	_, err := acquire(short, p)
-	assert.ErrorIs(t, err, context.DeadlineExceeded, "a background read never takes an interface lane")
-
-	r0 = take(ui)
 	got := make(chan *reader)
 	go func() {
-		r, _ := acquire(ui, p)
+		r, _ := acquire(ctx, p, quickRead)
 		got <- r
 	}()
 	select {
 	case <-got:
-		t.Fatal("an interface read took a busy reader")
+		t.Fatal("a read took a busy reader")
 	case <-time.After(50 * time.Millisecond):
 	}
-	give(r1)
-	assert.Same(t, p[1], <-got, "waits for whichever reader frees first")
-	give(p[1])
-	give(r0)
-	give(shared)
+	give(l2)
+	assert.Same(t, p[2], <-got, "waits for whichever reader frees first")
+	give(p[2])
+	give(l1)
+	give(n)
+}
+
+func TestReadClass(t *testing.T) {
+	db := openReadersDB(t)
+	rs := db.rd
+	ui := WithUIRead(t.Context())
+	assert.Equal(t, backgroundRead, rs.class(t.Context(), "SELECT 1"))
+	assert.Equal(t, newRead, rs.class(ui, "SELECT 1"))
+	rs.ran("SELECT 1", time.Millisecond)
+	assert.Equal(t, quickRead, rs.class(ui, "SELECT 1"))
+	rs.ran("SELECT 1", slowRead)
+	assert.Equal(t, longRead, rs.class(ui, "SELECT 1"))
+	assert.Equal(t, backgroundRead, rs.class(t.Context(), "SELECT 1"), "a background read stays on its lane")
+	for i := range maxTimed {
+		rs.ran("SELECT "+strconv.Itoa(i+2), time.Millisecond)
+	}
+	assert.LessOrEqual(t, len(rs.timed), maxTimed, "the table stays bounded")
+
+	_, err := db.Query(ui, "SELECT count(*) FROM t")
+	require.NoError(t, err)
+	assert.Equal(t, quickRead, rs.class(ui, "SELECT count(*) FROM t"), "a read records its run time")
 }
 
 // A long background read holds the shared reader; neither an interface
@@ -219,4 +253,34 @@ func TestReadersFailToOpenFallsBackToWriter(t *testing.T) {
 	assert.Nil(t, rs.get())
 	assert.True(t, rs.off)
 	assert.NoError(t, errors.Join(rs.close()))
+}
+
+// Two long interface reads hold both lanes they may take; a quick
+// interface read still runs at once on the quick lane.
+func TestLongInterfaceReadsLeaveTheQuickLane(t *testing.T) {
+	db := openReadersDB(t)
+	p := pool(t, db)
+	const long = "SELECT count(*) FROM (WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c) SELECT x FROM c)"
+	db.rd.ran(long, slowRead)
+	db.rd.ran("SELECT count(*) FROM t", time.Millisecond)
+	ui, cancel := context.WithCancel(WithUIRead(t.Context()))
+	done := make(chan error, 2)
+	for range 2 {
+		go func() {
+			_, err := db.Query(ui, long)
+			done <- err
+		}()
+	}
+	require.Eventually(t, func() bool { return len(p[1].lane) == 0 && len(p[2].lane) == 0 }, 5*time.Second, time.Millisecond)
+
+	quick, stop := context.WithTimeout(WithUIRead(t.Context()), 2*time.Second)
+	defer stop()
+	_, err := db.Query(quick, "SELECT count(*) FROM t")
+	require.NoError(t, err, "a quick read does not wait for long ones")
+	assert.Len(t, p[0].lane, 1, "it ran on the quick lane and gave it back")
+
+	cancel()
+	for range 2 {
+		assert.ErrorIs(t, <-done, context.Canceled)
+	}
 }
