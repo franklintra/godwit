@@ -127,6 +127,23 @@ func (r openResult) record(rep *report, prefix string) {
 	}
 }
 
+// recordFirst adds the first open of a fixture copy under prefix
+// ("open.first"): what the build does once to a database it has not opened
+// yet, such as a fork step that builds an index (store.migrations to
+// store.fork in the startup trace) or a new numbered migration.
+func (r openResult) recordFirst(rep *report, prefix string) {
+	rep.add(prefix+".process_ready_ms", "ms", "lower", "first open of a fixture copy: exec to the Local API accepting a ui connection, one-time steps included", ms(r.ProcessReady))
+	rep.add(prefix+".first_list_ms", "ms", "lower", "first open of a fixture copy: exec to the first thread list", ms(r.FirstList))
+	for _, p := range r.Phases {
+		switch p.Name {
+		case "backend: store.migrations":
+			rep.add(prefix+".migrations_ms", "ms", "lower", "first open: store.Open's numbered migrations (none when the fixture is current)", ms(p.D))
+		case "backend: store.fork":
+			rep.add(prefix+".fork_ms", "ms", "lower", "first open: store.Open's fork steps (ForkMigrations), which build a new index once", ms(p.D))
+		}
+	}
+}
+
 func slowest(calls []rpcCall, method string) float64 {
 	best := 0.0
 	for _, c := range calls {

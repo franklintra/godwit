@@ -145,3 +145,48 @@ func TestForkStepsAdditiveOnly(t *testing.T) {
 	store.ForkMigrations = []store.ForkMigration{{Name: "a", Stmts: nil}, {Name: "a", Stmts: nil}}
 	require.ErrorContains(t, store.CheckForkMigrations(), "used twice")
 }
+
+func indexSQL(t *testing.T, db *store.DB, name string) string {
+	t.Helper()
+	rows, err := db.Query(t.Context(), "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?", name)
+	require.NoError(t, err)
+	if len(rows.Values) == 0 {
+		return ""
+	}
+	return store.Str(rows.Values[0][0])
+}
+
+// The count and date indexes (perf-indexes) are built at the first open,
+// a later open leaves them as they are, and one dropped comes back.
+func TestForkPerfIndexes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "godwit.db")
+	db, err := store.Open(t.Context(), path)
+	require.NoError(t, err)
+	unseen, date := indexSQL(t, db, "messages_unseen"), indexSQL(t, db, "threads_last_date")
+	assert.Contains(t, unseen, `WHERE instr(flags, '\Seen') = 0`)
+	assert.Contains(t, date, "threads(last_date DESC, id DESC)")
+	_, err = db.Execute(t.Context(), "INSERT INTO accounts(id, email) VALUES (1, 'me@example.com')")
+	require.NoError(t, err)
+	_, err = db.Execute(t.Context(), `INSERT INTO messages(account_id, flags) VALUES (1, ''), (1, '\Seen'), (1, '\Flagged')`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	db, err = store.Open(t.Context(), path)
+	require.NoError(t, err, "a second open changes nothing")
+	assert.Equal(t, unseen, indexSQL(t, db, "messages_unseen"))
+	assert.Equal(t, date, indexSQL(t, db, "threads_last_date"))
+	_, err = db.Execute(t.Context(), "DROP INDEX messages_unseen")
+	require.NoError(t, err)
+	_, err = db.Execute(t.Context(), "DROP INDEX threads_last_date")
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	db, err = store.Open(t.Context(), path)
+	require.NoError(t, err)
+	defer db.Close()
+	assert.Equal(t, unseen, indexSQL(t, db, "messages_unseen"), "a dropped index comes back")
+	assert.Equal(t, date, indexSQL(t, db, "threads_last_date"))
+	rows, err := db.Query(t.Context(), `SELECT count(*) FROM messages INDEXED BY messages_unseen WHERE account_id = 1 AND instr(flags, '\Seen') = 0`)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), store.Int(rows.Values[0][0]), "the rebuilt index holds the unread messages")
+}

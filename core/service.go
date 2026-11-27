@@ -1101,12 +1101,22 @@ func (s *Service) setStatus(ctx context.Context, accountID int64, status, detail
 // ListFolders returns the account's folders with their unread counts. Each role
 // is on one folder at most, the one mailsync.RoleFolder resolves; inbox and
 // Gmail's Starred (flagged) are detected only.
+//
+// The counts read no message row they can do without: a folder's total
+// comes from its locations alone (folderTotals), and its unread count
+// reads the account's unread mail through the messages_unseen index, so
+// both scale with what they count, not with the account's mail.
 func (s *Service) ListFolders(ctx context.Context, accountID int64) ([]Folder, error) {
-	rows, err := s.db.Query(ctx, `SELECT f.id, f.account_id, f.name, CASE WHEN f.role IN ('inbox', 'flagged') THEN f.role ELSE '' END,
-		(SELECT count(*) FROM messages m JOIN message_locations l ON l.message_id = m.id AND l.folder_id = f.id AND l.shown
-			WHERE instr(m.flags, '\Seen') = 0 AND `+notPurgedCond+`), f.delim,
-		(SELECT count(*) FROM messages m JOIN message_locations l ON l.message_id = m.id AND l.folder_id = f.id AND l.shown WHERE `+notPurgedCond+`)
-		FROM folders f WHERE f.account_id = ? ORDER BY f.id`, accountID)
+	rows, err := s.db.Query(ctx, `SELECT id, account_id, name, CASE WHEN role IN ('inbox', 'flagged') THEN role ELSE '' END, delim
+		FROM folders WHERE account_id = ? ORDER BY id`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	totals, err := s.db.Query(ctx, folderTotals, accountID)
+	if err != nil {
+		return nil, err
+	}
+	unread, err := s.db.Query(ctx, folderUnread, accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -1120,19 +1130,58 @@ func (s *Service) ListFolders(ctx context.Context, accountID int64) ([]Folder, e
 			roles[id] = role
 		}
 	}
+	byFolder := func(vals [][]any) map[int64]int {
+		m := make(map[int64]int, len(vals))
+		for _, v := range vals {
+			m[store.Int(v[0])] = int(store.Int(v[1]))
+		}
+		return m
+	}
+	total, unseen := byFolder(totals.Values), byFolder(unread.Values)
 	out := make([]Folder, 0, len(rows.Values))
 	for _, r := range rows.Values {
 		id := store.Int(r[0])
 		out = append(out, Folder{ID: id, AccountID: store.Int(r[1]), Name: store.Str(r[2]),
-			Role: cmp.Or(roles[id], store.Str(r[3])), Delim: store.Str(r[5]), Unread: int(store.Int(r[4])), Total: int(store.Int(r[6]))})
+			Role: cmp.Or(roles[id], store.Str(r[3])), Delim: store.Str(r[4]), Unread: unseen[id], Total: total[id]})
 	}
 	return out, nil
 }
 
+// locPurgeWaits is mailsync.PurgeWaits on location alias l: a permanent
+// delete of its message waits to be pushed. It needs no message row.
+const locPurgeWaits = "EXISTS (SELECT 1 FROM ops o WHERE o.message_id = l.message_id AND o.kind = 'purge' AND o.state = 'pending')"
+
+// serverDraftCopies is the ids of the messages notServerDraft leaves out:
+// the server copies of drafts, by local row or by Message-ID, in their own
+// account. It reads only server_drafts and the copies it names: CROSS JOIN
+// keeps server_drafts, a handful of rows, as the outer loop (without it the
+// planner may as well scan messages and probe server_drafts).
+const serverDraftCopies = `SELECT m.id FROM server_drafts sd CROSS JOIN messages m ON m.id = sd.message_id AND m.account_id = sd.account_id
+	UNION SELECT m.id FROM server_drafts sd CROSS JOIN messages m ON m.account_id = sd.account_id AND m.message_id = sd.message_id_hdr
+	WHERE sd.message_id_hdr != ''`
+
+// folderTotals counts, per folder of account ?, the shown locations whose
+// message notPurgedCond keeps: its locations minus those whose delete
+// waits and the server copies of drafts. It reads no message row but the
+// copies'.
+const folderTotals = `SELECT l.folder_id, sum(l.message_id NOT IN (` + serverDraftCopies + `))
+	FROM folders f JOIN message_locations l ON l.folder_id = f.id AND l.shown
+	WHERE f.account_id = ? AND NOT ` + locPurgeWaits + ` GROUP BY l.folder_id`
+
+// folderUnread counts, per folder, the shown locations of account ?'s
+// unread messages that notPurgedCond keeps. A location's message is in its
+// folder's account (moves stay in one account), so the account's unread
+// mail is the folder's. The term instr(m.flags, '\Seen') = 0 is
+// messages_unseen's condition as written, so the query reads unread mail
+// only.
+const folderUnread = `SELECT l.folder_id, count(*) FROM messages m JOIN message_locations l ON l.message_id = m.id AND l.shown
+	WHERE m.account_id = ? AND instr(m.flags, '\Seen') = 0 AND ` + notPurgedCond + ` GROUP BY l.folder_id`
+
 // StarredCounts returns the unread count of starred messages by account ID, and total unread across all accounts.
+// It reads unread mail only, through messages_unseen.
 func (s *Service) StarredCounts(ctx context.Context) (map[int64]int, int, error) {
-	rows, err := s.db.Query(ctx, `SELECT account_id, count(*) FROM messages m
-		WHERE instr(flags, '\Flagged') > 0 AND instr(flags, '\Seen') = 0 AND `+notPurgedCond+` GROUP BY account_id`)
+	rows, err := s.db.Query(ctx, `SELECT m.account_id, count(*) FROM messages m
+		WHERE instr(m.flags, '\Seen') = 0 AND instr(m.flags, '\Flagged') > 0 AND `+notPurgedCond+` GROUP BY m.account_id`)
 	if err != nil {
 		return nil, 0, err
 	}

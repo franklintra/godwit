@@ -108,8 +108,9 @@ func run(ctx context.Context, c runConfig) error {
 	scratch := filepath.Join(c.root, fmt.Sprintf("scratch-%d", os.Getpid()))
 	defer os.RemoveAll(scratch)
 	// fresh copies the fixture into scratch (gone first): each part that
-	// writes starts from the same bytes, with a fresh WAL.
-	fresh := func() (*opener, error) {
+	// writes starts from the same bytes, with a fresh WAL. The copy's first
+	// open runs in g when it is not nil.
+	fresh := func(g *pressureGroup) (*opener, error) {
 		os.RemoveAll(scratch)
 		t0 := time.Now()
 		if err := copyFixture(fxDir, scratch); err != nil {
@@ -118,11 +119,19 @@ func run(ctx context.Context, c runConfig) error {
 		log.Printf("copied the fixture in %s", time.Since(t0).Round(time.Millisecond))
 		o := &opener{bin: c.bin, data: filepath.Join(scratch, meta.DataDir), settle: 1500 * time.Millisecond,
 			env: backendEnv(scratch, filepath.Join(scratch, meta.KeyringFile), filepath.Join(scratch, meta.KeyringKey))}
-		// the build's first open of this copy, unmeasured: what it does once
-		// (a fork step, a new migration) is not an opening's cost
-		if _, _, _, err := o.open(ctx, false, false); err != nil {
+		// the build's first open of this copy, not an opening: what it does
+		// once (a fork step, a new migration) is recorded apart, as open.first
+		o.group = g
+		r, _, _, err := o.open(ctx, false, false)
+		o.group = nil
+		if err != nil {
 			return nil, fmt.Errorf("first open: %w", err)
 		}
+		prefix := "open.first"
+		if g != nil {
+			prefix = "pressured.open.first"
+		}
+		r.recordFirst(rep, prefix)
 		return o, nil
 	}
 	var group *pressureGroup
@@ -132,8 +141,13 @@ func run(ctx context.Context, c runConfig) error {
 		}
 		defer group.close()
 	}
-	if c.want("open") || c.want("mem") || c.want("hot") || c.want("idle") || (group != nil && c.want("pressure")) {
-		o, err := fresh()
+	unpressured := c.want("open") || c.want("mem") || c.want("hot") || c.want("idle")
+	if unpressured || (group != nil && c.want("pressure")) {
+		var first *pressureGroup // the pressured parts alone: their copy's first open is pressured too
+		if !unpressured {
+			first = group
+		}
+		o, err := fresh(first)
 		if err != nil {
 			return err
 		}
@@ -179,7 +193,7 @@ func run(ctx context.Context, c runConfig) error {
 			modes = append(modes, group)
 		}
 		for _, g := range modes {
-			o, err := fresh()
+			o, err := fresh(nil)
 			if err != nil {
 				return err
 			}

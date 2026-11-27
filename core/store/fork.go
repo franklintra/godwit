@@ -125,6 +125,20 @@ var ForkMigrations = []ForkMigration{{
 		`ALTER TABLE drafts ADD COLUMN format TEXT NOT NULL DEFAULT 'html'`,
 		`ALTER TABLE accounts ADD COLUMN compose_format TEXT NOT NULL DEFAULT ''`,
 	},
+}, {
+	Name: "perf-indexes",
+	Stmts: []string{
+		// Unread mail only: the folder, starred and view counts read their
+		// rows through it, so they scale with unread mail, not all mail. A
+		// query uses it only when its WHERE holds this term as written,
+		// instr(m.flags, '\Seen') = 0 (COALESCE or another spelling does
+		// not match). An existing database builds it once at its next
+		// open: one scan of every message's flags.
+		`CREATE INDEX messages_unseen ON messages(account_id, thread_id) WHERE instr(flags, '\Seen') = 0`,
+		// Newest threads first across accounts: a unified list walks it and
+		// stops at its page instead of sorting every thread.
+		`CREATE INDEX threads_last_date ON threads(last_date DESC, id DESC)`,
+	},
 }}
 
 // schemaObject is what an additive statement creates.
