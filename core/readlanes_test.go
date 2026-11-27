@@ -60,8 +60,9 @@ func TestInterfaceReadsSkipTheWriter(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// The interface's scans (saved views, reply statuses) wait for the long
-// lane alone: while one holds it, a thread still opens on the quick lane.
+// The interface's scans (saved views) wait for the long lane alone: while
+// one holds it, a thread still opens on the quick lane, and so does the
+// deadline a reader message shows, which never queues behind them.
 func TestInterfaceScansLeaveTheQuickLane(t *testing.T) {
 	e := newSyncEnv(t)
 	e.put(t, "INBOX", msg("scan@x"))
@@ -79,14 +80,11 @@ func TestInterfaceScansLeaveTheQuickLane(t *testing.T) {
 	require.NoError(t, err, "a thread opens beside the scan")
 	_, err = e.s.ListAccounts(quick)
 	require.NoError(t, err)
+	_, err = e.s.ThreadDeadline(quick, tid)
+	require.NoError(t, err, "the reader's deadline does not queue behind the scan")
 
-	for name, call := range map[string]func(context.Context) error{
-		"SavedViews":     func(ctx context.Context) error { _, err := e.s.SavedViews(ctx); return err },
-		"ThreadDeadline": func(ctx context.Context) error { _, err := e.s.ThreadDeadline(ctx, tid); return err },
-	} {
-		short, stop := context.WithTimeout(ui, 200*time.Millisecond)
-		err := call(short)
-		stop()
-		assert.ErrorIs(t, err, context.DeadlineExceeded, "%s queues for the long lane", name)
-	}
+	short, stop2 := context.WithTimeout(ui, 200*time.Millisecond)
+	defer stop2()
+	_, err = e.s.SavedViews(short)
+	assert.ErrorIs(t, err, context.DeadlineExceeded, "SavedViews queues for the long lane")
 }

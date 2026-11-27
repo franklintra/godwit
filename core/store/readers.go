@@ -82,6 +82,23 @@ func isLongRead(ctx context.Context) bool {
 	return long
 }
 
+type foregroundScanKey struct{}
+
+// WithForegroundScan marks ctx's reads as a scan that the user waits on
+// now, such as the reply statuses behind the deadline a reader message
+// shows: on the interface's connections they never queue behind the long
+// lane's scans. They take the long lane when it is free, else the quick
+// lane when it is free, else whichever frees first; their run time never
+// sends them to the long lane alone. WithLongRead wins over it.
+func WithForegroundScan(ctx context.Context) context.Context {
+	return context.WithValue(ctx, foregroundScanKey{}, true)
+}
+
+func isForegroundScan(ctx context.Context) bool {
+	fg, _ := ctx.Value(foregroundScanKey{}).(bool)
+	return fg
+}
+
 // reader is one read-only connection and its lane: a one-slot semaphore
 // held while a statement runs, so a caller can see the connection is busy
 // without queueing on it.
@@ -109,8 +126,9 @@ type readers struct {
 type readClass int
 
 const (
-	quickRead readClass = iota // not marked long, and its last run (if any) under slowRead
-	longRead                   // marked by WithLongRead, or its last run slowRead or more
+	quickRead      readClass = iota // not marked, and its last run (if any) under slowRead
+	longRead                        // marked by WithLongRead, or its last run slowRead or more
+	foregroundScan                  // marked by WithForegroundScan, not by WithLongRead
 )
 
 // class is ctx and sql's readClass. A statement not run yet is quick
@@ -120,6 +138,9 @@ const (
 func (rs *readers) class(ctx context.Context, sql string) readClass {
 	if isLongRead(ctx) {
 		return longRead
+	}
+	if isForegroundScan(ctx) {
+		return foregroundScan
 	}
 	rs.timeMu.Lock()
 	slow := rs.timed[sql]
@@ -211,13 +232,16 @@ func (rs *readers) close() error {
 // acquire takes a reader for a read of class c and returns it; the
 // caller gives its lane back.
 //
-// A long read waits for the long lane (1) alone: saved views, reply
-// statuses and contacts run statements of tenths of seconds to seconds,
-// the window restarts SavedViews on every mail event during a sync, and
-// a reader message's ThreadDeadline scans each time. A quick read takes
-// the quick lane (0) first, the long lane when it is free, and otherwise
-// whichever frees first, so it waits at most for one quick statement or
-// for the long one in progress, never for a queue of scans.
+// A long read waits for the long lane (1) alone: saved views and
+// contacts run statements of tenths of seconds to seconds, and the window
+// restarts SavedViews on every mail event during a sync. A quick read
+// takes the quick lane (0) first, the long lane when it is free, and
+// otherwise whichever frees first, so it waits at most for one quick
+// statement or for the long one in progress, never for a queue of scans.
+// A foreground scan (a reader message's ThreadDeadline) is the same with
+// the lanes swapped: it prefers the long lane so that the quick one stays
+// free for the next thread, but it never queues behind the long lane's
+// scans, which arrive faster than they drain during a sync.
 func acquire(ctx context.Context, pool []*reader, c readClass) (*reader, error) {
 	quick, long := pool[0], pool[1]
 	if c == longRead {
@@ -228,7 +252,11 @@ func acquire(ctx context.Context, pool []*reader, c readClass) (*reader, error) 
 			return nil, ctx.Err()
 		}
 	}
-	for _, r := range []*reader{quick, long} {
+	order := []*reader{quick, long}
+	if c == foregroundScan {
+		order = []*reader{long, quick}
+	}
+	for _, r := range order {
 		select {
 		case <-r.lane:
 			return r, nil

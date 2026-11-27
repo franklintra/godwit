@@ -175,6 +175,27 @@ func TestAcquireLanes(t *testing.T) {
 	assert.Same(t, p[1], <-got, "waits for whichever reader frees first")
 	give(p[1])
 	give(q)
+
+	f := take(foregroundScan)
+	assert.Same(t, p[1], f, "a foreground scan takes the long lane first")
+	f2 := take(foregroundScan)
+	assert.Same(t, p[0], f2, "the long lane busy: the free quick lane, not a queue")
+	busy(foregroundScan)
+	give(f2)
+	give(f)
+
+	l = take(longRead)
+	queued := make(chan *reader)
+	go func() {
+		r, _ := acquire(ctx, p, longRead)
+		queued <- r
+	}()
+	time.Sleep(20 * time.Millisecond) // a long read queues for the long lane
+	f = take(foregroundScan)
+	assert.Same(t, p[0], f, "a foreground scan does not queue behind the long lane's scans")
+	give(f)
+	give(l)
+	give(<-queued)
 }
 
 func TestReadClass(t *testing.T) {
@@ -188,6 +209,8 @@ func TestReadClass(t *testing.T) {
 	assert.Equal(t, longRead, rs.class(WithLongRead(ui), "SELECT 1"), "a mark wins over a quick run")
 	rs.ran("SELECT 1", slowRead)
 	assert.Equal(t, longRead, rs.class(ui, "SELECT 1"))
+	assert.Equal(t, foregroundScan, rs.class(WithForegroundScan(ui), "SELECT 1"), "a foreground scan stays one however long it ran")
+	assert.Equal(t, longRead, rs.class(WithLongRead(WithForegroundScan(ui)), "SELECT 1"), "the long mark wins")
 	for i := range maxTimed {
 		rs.ran("SELECT "+strconv.Itoa(i+2), time.Millisecond)
 	}

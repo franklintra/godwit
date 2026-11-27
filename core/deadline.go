@@ -134,6 +134,9 @@ func (s *Service) ThreadDeadline(ctx context.Context, threadID int64) (ReaderDea
 		return ReaderDeadline{}, err
 	}
 	defer end()
+	// The reader asks on every message it opens, and waits: not behind
+	// the saved views' and avatars' scans (store.WithForegroundScan).
+	ctx = store.WithForegroundScan(ctx)
 	now := s.userNow(ctx)
 	statuses, err := s.replyStatuses(ctx, now.Unix())
 	if err != nil {
@@ -176,6 +179,7 @@ func (s *Service) checkDeadline(ctx context.Context, source string, threadID int
 // approval; before, if not nil, gets the row they replace. The caller holds
 // editMu.
 func (s *Service) deadlineWrites(ctx context.Context, source string, threadID int64, d Deadline, before *RemovedDeadline) ([]sqlite.Statement, error) {
+	ctx = store.WithForegroundScan(ctx) // the user waits for the deadline set from the reader
 	var err error
 	if d.MessageID, err = s.resolveID(ctx, d.MessageID); err != nil { // a row merged away: checked and written as the one it went into
 		return nil, err
