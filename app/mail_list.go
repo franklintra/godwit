@@ -176,6 +176,7 @@ type mailPage struct {
 	// list alone with what was read before.
 	countsDue   bool
 	countsKnown bool // a list run has read them
+	listCounts  bool // the list run in flight reads them
 	rowsDue     bool // a refresh whose counts wait: a view's rows are read without the views
 	missed      bool // a refresh came while another page showed: the next switch here reads everything
 
@@ -356,6 +357,13 @@ func (p *mailPage) reloadList(cached bool) {
 		return
 	}
 	p.listAgain = false
+	if p.list.loading {
+		// A switch: Run below drops the run in flight, so what it was to
+		// read is owed again, or the counts and views stay as they were
+		// before it with nothing left to read them.
+		p.countsDue = p.countsDue || p.listCounts
+		p.viewsStale = p.viewsStale || p.listViews
+	}
 	snap := a.fresh // what the App's load read in this refresh, if it just landed
 	if snap == nil || !a.loadAgain {
 		p.waitLoad = false // this read is as new as the refresh that waits
@@ -375,7 +383,7 @@ func (p *mailPage) reloadList(cached bool) {
 		p.viewCounts.Stop()
 		p.viewsStale = false
 	}
-	p.listViews = readViews
+	p.listViews, p.listCounts = readViews, counts
 	var viewWant map[string]int
 	if !reset {
 		viewWant = p.viewsKnownCounts()
@@ -477,7 +485,7 @@ func (p *mailPage) reloadList(cached bool) {
 		}
 		return err
 	}, func(err error) {
-		p.listViews = false
+		p.listViews, p.listCounts = false, false
 		if err != nil {
 			if readViews {
 				p.viewsStale = true // the next reload reads them again

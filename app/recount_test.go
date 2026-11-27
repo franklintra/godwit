@@ -211,6 +211,91 @@ func TestViewSwitchCounts(t *testing.T) {
 	}
 }
 
+// A switch while a refresh reads the counts drops that read; the switch
+// reads them in its place, or the sidebar keeps the counts from before the
+// change with nothing owed to correct them.
+func TestViewSwitchKeepsCountsInFlight(t *testing.T) {
+	h, svc, acc := countsHarness(t)
+	ids := inboxIDs(t, h, acc)
+	h.advance(countsEvery) // the next event's refresh reads the counts
+	svc.listGate.close()
+	n := h.app.events
+	if err := h.env.Svc.SetFlags(context.Background(), ids, []string{`\Seen`}, nil); err != nil {
+		t.Fatal(err)
+	}
+	h.until("the event", func() bool { return h.app.events > n })
+	h.advance(refreshEvery)
+	h.until("the refresh held at its list", func() bool { return svc.list.in.Load() == 1 && h.app.mail.listCounts })
+	if h.app.countsOwed {
+		t.Fatal("the refresh did not read the counts")
+	}
+
+	h.app.navigate(Route{Page: PageMail, View: core.View{Unified: "starred"}})
+	h.until("the held read cancelled", func() bool { return svc.listGate.cancelled.Load() == 1 })
+	svc.listGate.open()
+	h.until("starred", func() bool { return idle(h) })
+	h.advance(3 * countsEvery)
+	h.drain()
+	h.until("idle", func() bool { return idle(h) })
+
+	inbox := h.folderOf(acc, "inbox").ID
+	for _, f := range h.app.mail.folders[acc.ID] {
+		if f.ID == inbox && f.Unread != 0 {
+			t.Fatalf("the sidebar still shows %d unread in the inbox (unread %v)", f.Unread, h.app.unread)
+		}
+	}
+	if h.app.unread[acc.ID] != 0 {
+		t.Fatalf("unread %v", h.app.unread)
+	}
+}
+
+// A switch away from a saved view while its run reads the views drops
+// that read; the views are read again once the new list lands.
+func TestViewSwitchKeepsViewsInFlight(t *testing.T) {
+	h, svc, acc := countsHarness(t)
+	id, err := h.env.Svc.SaveView(context.Background(), core.SavedView{Name: "Bob", Icon: "team", Doc: core.SavedViewDoc{Match: core.MatchAll,
+		Conditions: []core.RuleCondition{{Field: core.FieldFrom, Op: core.OpContains, Value: "bob"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.waitMail("the view", func() bool {
+		return idle(h) && slices.ContainsFunc(h.app.mail.views, func(b core.SavedView) bool { return b.ID == id })
+	})
+	h.app.navigate(Route{Page: PageMail, View: savedRoute(id)})
+	h.until("the view's rows", func() bool { return idle(h) && len(h.app.mail.items) == 1 })
+	unread := func() int {
+		i := slices.IndexFunc(h.app.mail.views, func(b core.SavedView) bool { return b.ID == id })
+		if i < 0 {
+			t.Fatal("the view is gone")
+		}
+		return h.app.mail.views[i].Unread
+	}
+	if unread() != 1 {
+		t.Fatalf("the view counts %d unread", unread())
+	}
+
+	h.advance(countsEvery) // the next event's refresh reads the views in its list run
+	svc.savedGate.close()
+	n := h.app.events
+	if err := h.env.Svc.SetFlags(context.Background(), inboxIDs(t, h, acc), []string{`\Seen`}, nil); err != nil {
+		t.Fatal(err)
+	}
+	h.until("the event", func() bool { return h.app.events > n })
+	h.advance(refreshEvery)
+	h.until("the views' read held", func() bool { return svc.saved.in.Load() == 1 && h.app.mail.listViews })
+
+	h.app.navigate(Route{Page: PageMail, View: core.View{Unified: "inbox"}})
+	h.until("the held read cancelled", func() bool { return svc.savedGate.cancelled.Load() == 1 })
+	svc.savedGate.open()
+	h.until("the inbox", func() bool { return idle(h) })
+	h.advance(3 * countsEvery)
+	h.drain()
+	h.until("idle", func() bool { return idle(h) })
+	if unread() != 0 {
+		t.Fatalf("the sidebar still counts %d unread in the view", unread())
+	}
+}
+
 // In a saved view, a sync's event reads the view's rows again, without
 // the views' counts.
 func TestSavedViewRowsDuringBurst(t *testing.T) {
