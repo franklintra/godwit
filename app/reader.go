@@ -819,6 +819,7 @@ func (a *App) openServerDraft(id int64) {
 		draftID, err = a.svc.OpenServerDraft(ctx, id)
 		return err
 	}, func(err error) {
+		a.mailWritten() // the message leaves the lists and their counts
 		if err != nil {
 			a.toastErr(err)
 			return
@@ -2804,6 +2805,7 @@ func (r *reader) sendUnsubscribe(id int64) {
 // toasts (a failure offers the page in the browser), a draft opens in a
 // compose window, never sent.
 func (a *App) unsubscribed(u core.Unsubscribe, res core.UnsubscribeResult, err error) {
+	a.mailWritten() // a mailto: unsubscribe leaves a draft
 	switch {
 	case err != nil:
 		a.toastErr(err)
@@ -2903,6 +2905,7 @@ func (a *App) setBlocked(from string, block bool, done func()) {
 		}
 		return a.svc.UnblockSender(ctx, from)
 	}, func(err error) {
+		a.mailWritten() // the sender's mail leaves or comes back to the counts
 		if err != nil {
 			a.toastErr(err)
 			return
