@@ -30,14 +30,15 @@ import (
 // sees it.
 
 const (
-	// readerCount is the pool's size. Readers 0..uiReaders-1 serve only
-	// the interface; the last one is shared: background reads queue on it
-	// alone, and an interface read takes it when it is free. The interface
-	// itself starts overlapping long reads (a refresh's SavedViews while
-	// the previous one runs), so it gets two lanes of its own before it
-	// borrows the shared one.
+	// readerCount is the pool's size: reader 0 is the interface's quick
+	// lane, reader 1 its lane for long reads, reader 2 is shared with
+	// background reads (acquire).
 	readerCount = 3
-	uiReaders   = readerCount - 1
+	// slowRead is the run time from which a statement counts as long: its
+	// next runs stay off the quick lane.
+	slowRead = 100 * time.Millisecond
+	// maxTimed bounds the table of statement run times.
+	maxTimed = 256
 	// readerBusyTimeout bounds a reader's wait for a lock. In WAL a reader
 	// waits only while the WAL index is being rebuilt or reset.
 	readerBusyTimeout = 5 * time.Second
@@ -77,6 +78,51 @@ type readers struct {
 	pool atomic.Pointer[[]*reader]
 	mu   sync.Mutex // opening and closing
 	off  bool       // closed, or opening failed: every read stays on the writer
+
+	timeMu sync.Mutex
+	timed  map[string]bool // statement text: its last run took slowRead or more
+}
+
+// readClass is what acquire knows of a read: whose it is and, from the
+// statement's last run, whether it is long.
+type readClass int
+
+const (
+	backgroundRead readClass = iota
+	quickRead                // the interface's, last run under slowRead
+	newRead                  // the interface's, not run yet (or forgotten)
+	longRead                 // the interface's, last run slowRead or more
+)
+
+// class is ctx and sql's readClass.
+func (rs *readers) class(ctx context.Context, sql string) readClass {
+	if !isUIRead(ctx) {
+		return backgroundRead
+	}
+	rs.timeMu.Lock()
+	slow, ok := rs.timed[sql]
+	rs.timeMu.Unlock()
+	switch {
+	case !ok:
+		return newRead
+	case slow:
+		return longRead
+	}
+	return quickRead
+}
+
+// ran records how long sql ran. The table is cleared when full: its
+// statements are then new again until they run once more.
+func (rs *readers) ran(sql string, d time.Duration) {
+	rs.timeMu.Lock()
+	defer rs.timeMu.Unlock()
+	if _, ok := rs.timed[sql]; !ok && len(rs.timed) >= maxTimed {
+		rs.timed = nil
+	}
+	if rs.timed == nil {
+		rs.timed = make(map[string]bool)
+	}
+	rs.timed[sql] = d >= slowRead
 }
 
 // get returns the pool, opening it the first time; nil means the writer.
@@ -145,52 +191,87 @@ func (rs *readers) close() error {
 	return err
 }
 
-// acquire takes a reader for ctx: a background read waits for the shared
-// reader; an interface read takes the first free reader, else waits for
-// whichever frees first. The caller gives the lane back.
-func acquire(ctx context.Context, pool []*reader) (*reader, error) {
-	shared := pool[len(pool)-1]
-	if !isUIRead(ctx) {
-		select {
-		case <-shared.lane:
-			return shared, nil
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
+// acquire takes a reader for a read of class c and returns it; the
+// caller gives its lane back.
+//
+// A background read waits for the shared reader (2) alone. The
+// interface's reads never wait behind a background read while one of
+// their lanes is free, and a long one never takes the quick lane (0):
+// saved views run statements of seconds, several refreshes of them can
+// overlap at launch, and on a cold page cache every lane they can take
+// stays busy for seconds, so a sub-millisecond ListAccounts waited 4 s
+// for a reader. A quick read takes the quick lane first; a read not run
+// yet prefers the other two, so a long statement's first run lands on
+// the quick lane only when they are both busy.
+func acquire(ctx context.Context, pool []*reader, c readClass) (*reader, error) {
+	var order []*reader
+	switch c {
+	case backgroundRead:
+		order = []*reader{pool[2]}
+	case quickRead:
+		order = []*reader{pool[0], pool[1], pool[2]}
+	case newRead:
+		order = []*reader{pool[1], pool[2], pool[0]}
+	default:
+		order = []*reader{pool[1], pool[2]}
 	}
-	for _, r := range pool {
+	for _, r := range order {
 		select {
 		case <-r.lane:
 			return r, nil
 		default:
 		}
 	}
+	// None is free: wait for whichever frees first.
+	switch len(order) {
+	case 1:
+		select {
+		case <-order[0].lane:
+			return order[0], nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	case 2:
+		select {
+		case <-order[0].lane:
+			return order[0], nil
+		case <-order[1].lane:
+			return order[1], nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	select {
-	case <-pool[0].lane:
-		return pool[0], nil
-	case <-pool[1].lane:
-		return pool[1], nil
-	case <-shared.lane:
-		return shared, nil
+	case <-order[0].lane:
+		return order[0], nil
+	case <-order[1].lane:
+		return order[1], nil
+	case <-order[2].lane:
+		return order[2], nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
 }
 
-// acquire's last select names the three readers: a compile error here
-// means it must change with readerCount.
+// acquire names the three readers: a compile error here means it must
+// change with readerCount.
 var _ = [1]struct{}{}[readerCount-3]
 
 // read runs sql on a reader, timed for the SQL trace by the reader that
 // ran it (its wait for a lane included).
 func (rs *readers) read(ctx context.Context, pool []*reader, sql string, args []any) (sqlite.Rows, error) {
 	t := time.Now()
-	r, err := acquire(ctx, pool)
+	r, err := acquire(ctx, pool, rs.class(ctx, sql))
 	if err != nil {
 		return sqlite.Rows{}, err
 	}
+	run := time.Now()
 	rows, err := r.db.Query(ctx, sql, args...)
 	r.lane <- struct{}{}
+	// A statement canceled after slowRead is long all the same.
+	if d := time.Since(run); err == nil || d >= slowRead {
+		rs.ran(sql, d)
+	}
 	if perftrace.SQLOn() {
 		perftrace.SQL(ctx, r.kind, sql, t)
 	}

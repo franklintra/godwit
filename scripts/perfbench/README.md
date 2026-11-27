@@ -99,7 +99,7 @@ The report's `breakdown` cuts the opening at the backend's trace marks (`main`, 
 These traces stay in the binary that ships. Each costs one check of a package variable unless its environment variable is set.
 
 - `GODWIT_STARTUP_TRACE=<file>`: one line `<step> <unix ns>` per mark (`internal/perftrace`). It also makes SIGUSR1 write the runtime's memory metrics to `<file>.mem` (Unix).
-- `GODWIT_SQL_TRACE=<file>`: one line per database call (start, end, kind, the `client/method#n` of the Local API call it serves, the statement's start), from `core/store.DB`. All calls share one SQLite connection, so perfbench gets each call's queue wait from the order of the ends.
+- `GODWIT_SQL_TRACE=<file>`: one line per database call (start, end, kind, the `client/method#n` of the Local API call it serves, the statement's start), from `core/store.DB`. The kind names the connection (`q`, `x`, `t<n>` on the writer, `q@r<i>` on read-only connection `i`); calls on one connection run one at a time, so perfbench gets each call's queue wait from the order of the ends within its connection.
 
 ## Limits
 
