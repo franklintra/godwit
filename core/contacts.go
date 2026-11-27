@@ -337,6 +337,7 @@ func (s *Service) enabledCardComponents(ctx context.Context, skip map[string]boo
 // contacts gathers the contacts of accountID's mail (0: every account's plus
 // zero-mail enabled address-book contacts).
 func (s *Service) contacts(ctx context.Context, accountID int64) ([]Contact, error) {
+	ctx = store.WithLongRead(ctx) // every message, grouped by sender
 	skip, err := s.ownAddrSet(ctx)
 	if err != nil {
 		return nil, err
@@ -644,6 +645,7 @@ func (s *Service) fromHeadersForAddrs(ctx context.Context, keys []string) ([]str
 	if len(keys) == 0 {
 		return nil, nil
 	}
+	ctx = store.WithLongRead(ctx) // from_addr LIKE has no index: every message
 	keySet := make(map[string]bool, len(keys))
 	for _, k := range keys {
 		keySet[k] = true

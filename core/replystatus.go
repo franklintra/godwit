@@ -137,6 +137,7 @@ func (p mailPeople) mine(m *logicalMail) bool { return m.in("sent") || p.own[own
 // are read, never stored, so that the passage of time needs no job. Only those
 // active in the last replyStatusDays days can have one.
 func (s *Service) replyStatuses(ctx context.Context, now int64) (map[int64]replyStatus, error) {
+	ctx = store.WithLongRead(ctx) // it reads every conversation of the last replyStatusDays
 	cutoff := now - replyStatusDays*86400
 	roles, err := s.folderRoles(ctx)
 	if err != nil {

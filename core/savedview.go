@@ -280,6 +280,7 @@ type viewEval struct {
 }
 
 func (s *Service) newViewEval(ctx context.Context) (*viewEval, error) {
+	ctx = store.WithLongRead(ctx) // reply statuses, the user's correspondents, every deadline
 	now := s.clk().Now().Unix()
 	statuses, err := s.replyStatuses(ctx, now)
 	if err != nil {
@@ -529,6 +530,7 @@ func viewOrder(a, b placedThread) int {
 // never empty because its rows are on a later page.
 // shortcut: reads every member on each call; page in SQL by group if large views get slow.
 func (s *Service) placed(ctx context.Context, e *viewEval, viewID int64, d SavedViewDoc) ([]placedThread, error) {
+	ctx = store.WithLongRead(ctx) // every conversation the view's conditions can hold
 	exceptions := map[string][]int64{}
 	if viewID != 0 {
 		rows, err := s.db.Query(ctx, "SELECT thread_id, kind FROM saved_view_exceptions WHERE view_id = ?", viewID)

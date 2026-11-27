@@ -196,10 +196,13 @@ func (s *Service) ContactAvatar(ctx context.Context, addr string) (Avatar, error
 	if len(av.Data) > 0 {
 		return av, nil
 	}
+	// Both scans below read every message's sender (from_addr LIKE, then
+	// IN, with no index to narrow them): off the interface's quick lane.
+	scan := store.WithLongRead(ctx)
 	var headers []string
 	seen := map[string]bool{}
 	for _, k := range compAddrs {
-		q, err := s.withSenders(ctx, SearchQuery{FromAddr: k})
+		q, err := s.withSenders(scan, SearchQuery{FromAddr: k})
 		if err != nil {
 			return Avatar{}, err
 		}
@@ -219,7 +222,7 @@ func (s *Service) ContactAvatar(ctx context.Context, addr string) (Avatar, error
 	}
 	hb, _ := json.Marshal(headers)
 	args := append([]any{string(hb)}, left...)
-	rows, err := s.db.Query(ctx, "SELECT m.id FROM messages m WHERE m.from_addr IN (SELECT value FROM json_each(?)) AND "+
+	rows, err := s.db.Query(scan, "SELECT m.id FROM messages m WHERE m.from_addr IN (SELECT value FROM json_each(?)) AND "+
 		shownFolder+" IS NOT NULL AND NOT "+shownIn("("+placeholders(len(left))+")")+
 		" ORDER BY m.date DESC, m.id DESC LIMIT 1", args...)
 	if err != nil || len(rows.Values) == 0 {
