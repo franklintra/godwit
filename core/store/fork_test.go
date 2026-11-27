@@ -190,3 +190,33 @@ func TestForkPerfIndexes(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), store.Int(rows.Values[0][0]), "the rebuilt index holds the unread messages")
 }
+
+// The scan indexes (scan-indexes) are built on a database that has mail,
+// and one dropped comes back. messages_from_list holds list mail only:
+// octet_length is 0 for an empty value and NULL for NULL, as the test on
+// list_unsubscribe that it stands for.
+func TestForkScanIndexes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "godwit.db")
+	db, err := store.Open(t.Context(), path)
+	require.NoError(t, err)
+	_, err = db.Execute(t.Context(), "INSERT INTO accounts(id, email) VALUES (1, 'me@example.com')")
+	require.NoError(t, err)
+	_, err = db.Execute(t.Context(), `INSERT INTO messages(account_id, from_addr, date, list_unsubscribe) VALUES
+		(1, 'a@x', 1, NULL), (1, 'b@x', 2, ''), (1, 'c@x', 3, '<mailto:u@x>'), (1, 'c@x', 4, '<https://x/u>')`)
+	require.NoError(t, err)
+	for _, ix := range []string{"messages_from", "messages_from_list", "signature_images_cid"} {
+		_, err = db.Execute(t.Context(), "DROP INDEX "+ix)
+		require.NoError(t, err)
+	}
+	require.NoError(t, db.Close())
+
+	db, err = store.Open(t.Context(), path)
+	require.NoError(t, err)
+	defer db.Close()
+	assert.Contains(t, indexSQL(t, db, "messages_from"), "messages(from_addr, date, id, account_id, flags)")
+	assert.Contains(t, indexSQL(t, db, "messages_from_list"), "WHERE octet_length(list_unsubscribe) > 0")
+	assert.Contains(t, indexSQL(t, db, "signature_images_cid"), "signature_images(cid, content_type)")
+	rows, err := db.Query(t.Context(), `SELECT count(*) FROM messages INDEXED BY messages_from_list WHERE octet_length(list_unsubscribe) > 0`)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), store.Int(rows.Values[0][0]), "the rebuilt index holds the list mail")
+}

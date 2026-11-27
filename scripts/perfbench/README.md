@@ -16,7 +16,7 @@ PERF_CGROUP=1 ~/Developer/godwit/.worktrees/vps-test <worktree> \
 # Quick run (3 runs, 15 s idle, 4,000-message sync)
 PERF_CGROUP=1 ~/Developer/godwit/.worktrees/vps-test <worktree> 'scripts/perfbench/run.sh -quick'
 
-# Some parts only: open, mem, hot, idle, pressure, contention, sync, web
+# Some parts only: open, mem, hot, idle, pressure, contention, window, sync, web (contention includes window)
 PERF_CGROUP=1 ~/Developer/godwit/.worktrees/vps-test <worktree> 'scripts/perfbench/run.sh -only open,pressure -runs 7'
 
 # The web pages and bundle sizes (builds web/dist, about 1 more minute)
@@ -84,6 +84,16 @@ The report's `breakdown` cuts the opening at the backend's trace marks (`main`, 
 - `boot_conn_busy_background_pct`: the share of a boot during which the connection runs the backend's own work.
 - The notes list the 5 longest background statements during the boots, and the connection time per client.
 
+**Window during sync** (`contention.window.*`, and `pressured.contention.window.*`; runs with `contention`, or alone with `-only window`). What Franklin feels with his window open while a sync writes: a fresh copy, a new account's initial sync from loopback IMAP, the App attached (it reloads on every mail event, SavedViews recount included), the tray's loads every second. Before the sync, the copy gets what the fixture lacks: a signature with two images per account, and with `-window-views franklin` (default) only the reply-based view (his "À traiter"; `fixture` keeps all four). Then `-window-rounds` rounds (8, quick 4; they stop when the sync ends), each on a user connection, with 0.5 s pauses:
+
+- view switch: ListThreads of the unified inbox, the largest INBOX and starred, ViewContents of the reply-based view (`view.*_ms`, together `view_switch_ms`);
+- new message: NewDraft then the compose page's Load, as `webui.ComposePage` calls it (`new_message_ms`, split in `new_draft_ms` and `compose_load_ms`);
+- avatars: ContactAvatar for 12 list senders at once (`avatars_ms`, `avatar_call_ms`);
+- message open: the next 10 mails of the unified inbox, one after the other, each shown 300 ms, with the reader's calls in its order and concurrency (`openMail` in `window.go`): `open.thread_ms` (GetThread, ThreadLabels), `message_open_ms` (until the newest body is read, when the reader switches), `open.all_ms` (until the mail's last call answered: ThreadDeadline, cards, tags, SetFlags, skills, avatar, unsubscribe, OpenPGP), `open.thread_deadline_ms`, and `scroll_ms` for the 10;
+- first round only: the palette's Find with nothing typed (`palette_find_ms`; its contacts scan is the one a recipient completion runs).
+
+Per probe group, `*_sql_wait_ms` and `*_sql_exec_ms` split its statements' time into queued and running. Per round, `conn_busy_pct` (the connection busy at all), `conn_busy_background_pct` (the backend's own work), `conn_busy_window_pct` and `conn_busy_user_pct`. `window_saved_views_per_min` and `window_list_threads_per_min` count the App's reloads (on the Mac, SavedViews ran about every 3.5 s during sync). The notes give the connection time per client, the window's calls, and the 12 statements that held the connection longest.
+
 **Memory** (`mem.*`, `gc.*`). The backend's RSS split by mapping, from `/proc/<pid>/smaps`: `go_heap_rss` is the Go arenas, `c_heap` is other anonymous memory (malloc: SQLite's page cache and allocations, libc), and `file` is file-backed pages. `go_live` and `go_total` come from `runtime/metrics`, which the backend writes on SIGUSR1 when the startup trace is on. Samples are taken at the first list, after one round of the hot paths, and after the idle window. Peaks are VmHWM. `gc.*` come from gctrace.
 
 **Idle** (`idle.*`). For 60 s (quick 15 s) in five slices, with the interface attached and idle: CPU ms per minute and context switches per minute. The accounts are offline (connection refused), so this includes the workers' retry timers, not IMAP IDLE.
@@ -112,7 +122,7 @@ These traces stay in the binary that ships. Each costs one check of a package va
 - `main.go`: the commands `fixture`, `run`, `compare`, `show`.
 - `fixture.go`, `mailgen.go`, `mailserver.go`, `keyring.go`: the fixture.
 - `run.go`, `open.go`, `backend.go`, `boot.go`, `platform.go`, `rpctrace.go`, `proc.go`: openings, memory, idle.
-- `cgroup.go`, `contention.go`, `sqltrace.go`: memory pressure, contention, the SQL trace's analysis.
+- `cgroup.go`, `contention.go`, `window.go`, `sqltrace.go`: memory pressure, contention, the window during sync, the SQL trace's analysis.
 - `hot.go`, `syncbench.go`, `web.go`, `web/webboot.ts`: the other parts.
 - `report.go`: the JSON, the table and the comparison.
 - `run.sh`: build and run on the VPS.

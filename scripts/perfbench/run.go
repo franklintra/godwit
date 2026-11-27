@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"time"
 )
@@ -21,9 +22,9 @@ type runConfig struct {
 	scale                                           float64
 	seed                                            uint64
 	runs, hotRounds, viewRounds, syncMsgs, syncRuns int
-	contMsgs, contBoots, pressRounds                int
+	contMsgs, contBoots, pressRounds, winRounds     int
 	mem                                             int64
-	pressure                                        string
+	pressure, winViews                              string
 	idle                                            time.Duration
 	quick                                           bool
 	only                                            map[string]bool
@@ -46,7 +47,9 @@ func cmdRun(ctx context.Context, args []string) error {
 	quick := fl.Bool("quick", false, "fewer runs and shorter windows")
 	runs := fl.Int("runs", 0, "opening runs, cold and warm each (default 5, quick 3)")
 	idle := fl.Duration("idle", 0, "idle window (default 60s, quick 15s)")
-	only := fl.String("only", "", "comma list of parts: open,mem,hot,idle,pressure,contention,sync,web (default all)")
+	only := fl.String("only", "", "comma list of parts: open,mem,hot,idle,pressure,contention,window,sync,web (default all; contention includes window)")
+	winRounds := fl.Int("window-rounds", 0, "probe rounds of the window part, while its sync writes (default 8, quick 4)")
+	fl.StringVar(&c.winViews, "window-views", "franklin", "saved views the window part keeps: franklin (only the reply-based one, as his database) or fixture (all four)")
 	mem := fl.String("mem", "350M", "memory.max of the pressured backend, page cache included")
 	fl.StringVar(&c.pressure, "pressure", "auto", "pressured parts: auto (when PERFBENCH_CGROUP is set), on, off")
 	fl.IntVar(&c.syncMsgs, "sync-messages", 10000, "messages in the folder the sync and contention parts sync (quick: 4000)")
@@ -58,6 +61,16 @@ func cmdRun(ctx context.Context, args []string) error {
 		if c.syncMsgs == 10000 {
 			c.syncMsgs = 4000
 		}
+	}
+	c.winRounds = 8
+	if c.quick {
+		c.winRounds = 4
+	}
+	if *winRounds > 0 {
+		c.winRounds = *winRounds
+	}
+	if !slices.Contains(windowViews, c.winViews) {
+		return fmt.Errorf("-window-views: one of %v", windowViews)
 	}
 	if *runs > 0 {
 		c.runs = *runs
@@ -177,7 +190,7 @@ func run(ctx context.Context, c runConfig) error {
 		}
 	}
 	var mail *loopMail
-	if c.want("contention") || c.want("sync") {
+	if c.want("contention") || c.want("window") || c.want("sync") {
 		n := c.syncMsgs // one folder for both: the contention account syncs it too
 		c.contMsgs = n
 		t0 := time.Now()
@@ -187,23 +200,34 @@ func run(ctx context.Context, c runConfig) error {
 		defer mail.Close()
 		log.Printf("loopback IMAP folder of %d messages ready in %s", n, time.Since(t0).Round(time.Millisecond))
 	}
-	if c.want("contention") {
+	if c.want("contention") || c.want("window") {
 		modes := []*pressureGroup{nil}
 		if group != nil {
 			modes = append(modes, group)
 		}
 		for _, g := range modes {
+			prefix := "contention"
+			if g != nil {
+				prefix = "pressured.contention"
+			}
+			if c.want("contention") {
+				o, err := fresh(nil)
+				if err != nil {
+					return err
+				}
+				o.group = g
+				if err := runContention(ctx, o, mail, c.contMsgs, c.contBoots, prefix, rep); err != nil {
+					return fmt.Errorf("%s: %w", prefix, err)
+				}
+			}
+			// the window part on its own copy: its sync starts fresh
 			o, err := fresh(nil)
 			if err != nil {
 				return err
 			}
 			o.group = g
-			prefix := "contention"
-			if g != nil {
-				prefix = "pressured.contention"
-			}
-			if err := runContention(ctx, o, mail, c.contMsgs, c.contBoots, prefix, rep); err != nil {
-				return fmt.Errorf("%s: %w", prefix, err)
+			if err := runWindow(ctx, o, mail, meta, c.winRounds, c.winViews, prefix+".window", rep); err != nil {
+				return fmt.Errorf("%s.window: %w", prefix, err)
 			}
 		}
 	}

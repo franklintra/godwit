@@ -408,6 +408,11 @@ func (s *Service) SearchWith(ctx context.Context, q SearchQuery, limit int) ([]M
 	return s.searchMessages(ctx, cond+" AND "+fcond, append(args, fargs...), limit)
 }
 
+// fromHeadersSQL lists the stored From headers matching the condition
+// that follows it, on from_addr only. A LIKE '%…%' has no index range, so it
+// scans messages_from rather than the message rows.
+const fromHeadersSQL = "SELECT DISTINCT from_addr FROM messages WHERE "
+
 // withSenders resolves q.FromAddr to the From headers stored for it, as
 // AddrKey reads them: SQLite folds only ASCII case, and a header may quote
 // its local part ("a b"@x) or wrap it in a display name.
@@ -420,7 +425,7 @@ func (s *Service) withSenders(ctx context.Context, q SearchQuery) (SearchQuery, 
 	if at := strings.LastIndexByte(key, '@'); at >= 0 && strings.IndexFunc(key[at:], func(r rune) bool { return r >= utf8.RuneSelf }) < 0 {
 		cond, args = `from_addr LIKE ? ESCAPE '\'`, []any{likeArg(key[at:])} // narrowed by an ASCII domain, which LIKE folds
 	}
-	rows, err := s.db.Query(ctx, "SELECT DISTINCT from_addr FROM messages WHERE "+cond, args...)
+	rows, err := s.db.Query(ctx, fromHeadersSQL+cond, args...)
 	if err != nil {
 		return q, err
 	}

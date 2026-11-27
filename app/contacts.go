@@ -759,6 +759,7 @@ func (p *contactsPage) archive(addr string) {
 		res, err = a.svc.ArchiveSender(ctx, addr)
 		return err
 	}, func(err error) {
+		a.mailWritten()
 		if err != nil {
 			a.toastErr(err)
 		}
@@ -774,6 +775,7 @@ func (p *contactsPage) archive(addr string) {
 			toast.Timeout, toast.Data = left, kit.ToastData{Deadline: start.Add(core.UndoArchiveWindow)}
 			toast.Action, toast.OnAction = i18n.T("compose.undo"), func() {
 				a.do(func(ctx context.Context) error { return a.svc.UndoArchive(ctx, res) }, func(err error) {
+					a.mailWritten()
 					if err != nil {
 						a.toastErr(err)
 					}

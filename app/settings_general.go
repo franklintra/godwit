@@ -639,6 +639,7 @@ func (p *settingsPage) removeAppDates() {
 	a, shown := p.a, p.appDates
 	var removed []core.RemovedDeadline
 	a.do(func(ctx context.Context) (err error) { removed, err = a.svc.RemoveAppAndWitDeadlines(ctx); return err }, func(err error) {
+		a.mailWritten() // the views that wait on reply dates count again
 		p.readAppDates()
 		if err != nil {
 			a.toastErr(err)
@@ -651,6 +652,7 @@ func (p *settingsPage) removeAppDates() {
 		a.toasts = append(a.toasts, ui.Toast{ID: fmt.Sprintf("app-dates-%d", now.UnixNano()), Title: i18n.Tf("settings.app_deadlines.removed", shown),
 			Action: i18n.T("compose.undo"), Timeout: viewUndoWindow, Data: kit.ToastData{Deadline: now.Add(viewUndoWindow)}, OnAction: func() {
 				a.do(func(ctx context.Context) error { return a.svc.UndoRemoveAppAndWitDeadlines(ctx, removed) }, func(err error) {
+					a.mailWritten()
 					if err != nil {
 						a.toastErr(err)
 					}

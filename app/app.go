@@ -281,6 +281,14 @@ type App struct {
 	refreshStop       func()         // the pending throttled refresh; nil when none
 	events, refreshes int            // counted for tests: refreshes stay far fewer than events
 
+	// The counts (accounts, folders' and views' unread, starred, outbox)
+	// are read at most once per countsEvery while mail events keep coming
+	// (countsLater); the list is read at every refresh.
+	countsAt    time.Time // when the last refresh that read them ran; zero before one
+	countsOwed  bool      // a refresh since then left them as they were: countsTimer reads them
+	countsTimer func()    // stops the trailing refresh that reads them; nil when none
+	countsNow   bool      // mail written here landed: the next refresh reads them, at once
+
 	syncBatch  *syncBatch          // the Sync All in flight; nil when none
 	syncing    map[int64]bool      // accounts syncing now
 	syncAsked  map[int64]bool      // accounts whose SyncNow, asked for here, has not returned

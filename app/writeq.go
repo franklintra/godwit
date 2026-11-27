@@ -1,6 +1,9 @@
 package app
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
 // writeQueue orders writes to one resource: a key's writes run one at a time,
 // and while one runs only the newest submitted snapshot waits. All its state
@@ -91,6 +94,12 @@ func (q *writeQueue) Chain(key string, fn func(ctx context.Context) error, done 
 	}
 }
 
+// mailKey reports whether key's writes change mail: messages' flags or
+// folders (per account), threads (mail:), labels, views or classification.
+func mailKey(key string) bool {
+	return strings.HasPrefix(key, "account:") || strings.HasPrefix(key, "mail:") || key == "labels" || key == "saved" || key == "security"
+}
+
 type chainJob struct {
 	fn   func(ctx context.Context) error
 	done func(err error)
@@ -102,6 +111,9 @@ func (q *writeQueue) runChain(key string) {
 		defer q.settled(err)
 		if j.done != nil {
 			j.done(err)
+		}
+		if mailKey(key) {
+			q.a.mailWritten()
 		}
 		if rest := q.chains[key][1:]; len(rest) > 0 {
 			q.chains[key] = rest

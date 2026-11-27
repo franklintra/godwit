@@ -542,6 +542,15 @@ func (s *syncRun) HeldRefs(ctx context.Context, ref backend.FolderRef, refs []ba
 	return out, nil
 }
 
+// heldIDs is the stored server_ids of a folder's messages, read from the
+// index messages_server_id alone. A join of the locations with messages
+// read every location's message row, and server_id sits after the inline
+// bodies, so each read walked the body's overflow pages. +id keeps SQLite
+// from looking the folder's ids up in the table. Accounts without a stable
+// identity store no server_id: their range of the index is empty.
+const heldIDs = `SELECT id, server_id FROM messages WHERE account_id = ? AND server_id IS NOT NULL
+	AND +id IN (SELECT message_id FROM message_locations WHERE folder_id = ?)`
+
 // Held is backend.Local's: every server location in folder, with its message's server_id.
 func (s *syncRun) Held(ctx context.Context, ref backend.FolderRef) (map[backend.MessageRef]string, error) {
 	out := map[backend.MessageRef]string{}
@@ -549,13 +558,22 @@ func (s *syncRun) Held(ctx context.Context, ref backend.FolderRef) (map[backend.
 	if f == nil {
 		return out, nil
 	}
-	rows, err := s.db.Query(ctx, `SELECT l.server_ref, m.server_id FROM message_locations l JOIN messages m ON m.id = l.message_id
-		WHERE l.folder_id = ? AND l.server_ref IS NOT NULL`, f.id)
+	rows, err := s.db.Query(ctx, `SELECT server_ref, message_id FROM message_locations WHERE folder_id = ? AND server_ref IS NOT NULL`, f.id)
 	if err != nil {
 		return nil, err
 	}
+	ids := map[int64]string{}
+	if len(rows.Values) > 0 {
+		idRows, err := s.db.Query(ctx, heldIDs, s.a.id, f.id)
+		if err != nil {
+			return nil, err
+		}
+		for _, v := range idRows.Values {
+			ids[store.Int(v[0])] = store.Str(v[1])
+		}
+	}
 	for _, v := range rows.Values {
-		out[backend.MessageRef(store.Str(v[0]))] = store.Str(v[1])
+		out[backend.MessageRef(store.Str(v[0]))] = ids[store.Int(v[1])]
 	}
 	for _, it := range s.stash[f.id] { // stored once the folder's arrivals end
 		out[it.m.Ref] = it.m.ServerID

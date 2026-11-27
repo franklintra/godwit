@@ -57,6 +57,14 @@ func chromeMetrics(titleH float32, t theme.Tokens) (barH, radius float32) {
 
 const (
 	refreshEvery = 250 * time.Millisecond
+	// countsEvery is how often a stream of mail events (a sync) rereads the
+	// counts: the accounts' and folders' unread, the views' and starred
+	// counts, the outbox. Reading the views walks every message once per
+	// view (about 0.8 s on a 2.8 GB database, with the one connection
+	// held), and a sync's events came every 3.5 s: the views alone took
+	// 13 s of each minute. At 20 s they take about 4 %, and a badge lags
+	// the mail it counts by 20 s at most, during a sync only.
+	countsEvery = 20 * time.Second
 )
 
 func (a *App) page() pageView { return a.pages[a.route.Page] }
@@ -117,7 +125,11 @@ func (a *App) setRoute(r Route) {
 	}
 	a.route = r
 	a.gen++
-	a.page().refresh(nil)
+	if r.Page == PageMail {
+		a.mail.switchView()
+	} else {
+		a.page().refresh(nil)
+	}
 }
 
 // onEvent notes ev for the next refresh, at most one per refreshEvery; sync
@@ -189,6 +201,12 @@ func (a *App) onEvent(ev events.Event) {
 		}
 	}
 	a.dirty = append(a.dirty, ev)
+	a.refreshSoon()
+}
+
+// refreshSoon refreshes in refreshEvery, with the events noted meanwhile,
+// unless a refresh is due already.
+func (a *App) refreshSoon() {
 	if a.refreshStop == nil {
 		a.refreshStop = a.after(refreshEvery, func() {
 			dirty := a.dirty
@@ -199,7 +217,8 @@ func (a *App) onEvent(ev events.Event) {
 }
 
 // refresh re-reads the accounts, settings and unread counts, and what the
-// page shows.
+// page shows. While mail events keep coming, the counts wait (countsLater):
+// the list alone is read, and the counts once countsEvery has passed.
 func (a *App) refresh(dirty []events.Event) {
 	a.refreshes++
 	if len(dirty) > 0 && !slices.ContainsFunc(dirty, func(ev events.Event) bool { return ev.Type != events.SkillsChanged }) {
@@ -208,8 +227,71 @@ func (a *App) refresh(dirty []events.Event) {
 		}
 		return // onEvent 已刷新阅读器的 Skill，隐藏状态也包含在内。
 	}
+	if a.route.Page != PageMail {
+		a.mail.missed = true // its list is not read: the way back reads it
+	}
+	if a.countsLater(dirty) {
+		a.countsOwed = true
+		a.trailCounts()
+		if a.route.Page == PageMail {
+			a.mail.refreshList()
+		} else {
+			a.page().refresh(dirty)
+		}
+		return
+	}
+	a.countsRead()
 	a.load()
 	a.page().refresh(dirty)
+}
+
+// countsLater reports whether a refresh for dirty leaves the counts as they
+// are: dirty holds only mail events of accounts the App knows (a sync's),
+// the counts were read less than countsEvery ago, and no mail written here
+// has landed since.
+func (a *App) countsLater(dirty []events.Event) bool {
+	if a.countsNow || !a.loaded || a.countsAt.IsZero() || len(dirty) == 0 || a.clock.Now().Sub(a.countsAt) >= countsEvery {
+		return false
+	}
+	return !slices.ContainsFunc(dirty, func(ev events.Event) bool {
+		if ev.Type != events.MessagesChanged && ev.Type != events.MessageReceived {
+			return true
+		}
+		return ev.AccountID != 0 && !slices.ContainsFunc(a.accounts, func(acc core.Account) bool { return acc.ID == ev.AccountID })
+	})
+}
+
+// countsRead notes a refresh that reads the counts: the trailing one is no
+// longer needed.
+func (a *App) countsRead() {
+	a.countsAt, a.countsOwed, a.countsNow = a.clock.Now(), false, false
+	if a.countsTimer != nil {
+		a.countsTimer()
+		a.countsTimer = nil
+	}
+}
+
+// trailCounts reads the counts a refresh left once countsEvery has passed
+// since they were last read, so the last of a burst's changes shows.
+func (a *App) trailCounts() {
+	if a.countsTimer != nil {
+		return
+	}
+	a.countsTimer = a.after(a.countsAt.Add(countsEvery).Sub(a.clock.Now()), func() {
+		a.countsTimer = nil
+		if a.countsOwed {
+			a.countsNow = true
+			a.refresh([]events.Event{{Type: events.MessagesChanged}})
+		}
+	})
+}
+
+// mailWritten follows a write of mail made here (mark read, move, delete,
+// archive): the counts are read at the next refresh, which comes at once,
+// whether or not the write's own event has refreshed already.
+func (a *App) mailWritten() {
+	a.countsNow = true
+	a.refreshSoon()
 }
 
 // tick redraws once a minute, so the sync age stays current.
