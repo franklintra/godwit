@@ -20,14 +20,16 @@ import (
 // readSnapshot: GetSettings, ListAccounts, ListFolders per account,
 // RecentSignInCodes), a probe times ListAccounts every 250 ms, and the
 // interface opens boots times against the running backend. The SQL trace
-// splits each call's database time into waiting for the one SQLite
-// connection and running.
+// splits each call's database time into waiting for its SQLite connection
+// (the writer or a reader, sqlCall) and running.
 func runContention(ctx context.Context, o *opener, mail *loopMail, nmsg, boots int, prefix string, rep *report) error {
 	b, err := startBackend(o.bin, o.data, o.env, o.group, true)
 	if err != nil {
 		return err
 	}
 	defer func() { b.stop(); b.cleanup() }()
+	wal := walWatch(o.data)
+	defer wal()
 	setup, _, err := b.dialUI(ctx, 10*time.Minute, nil, "perfbench-setup")
 	if err != nil {
 		return err
@@ -151,6 +153,7 @@ func runContention(ctx context.Context, o *opener, mail *loopMail, nmsg, boots i
 	}
 	close(stop)
 	wg.Wait()
+	addWAL(rep, prefix, "the sync and the boots", wal)
 	endN, endAt := stored(), time.Now()
 	rep.add(prefix+".boots_during_sync", "count", "higher", "boots that started while the sync still wrote", float64(during))
 	rep.add(prefix+".sync_msgs_per_s", "msg/s", "higher", "the account's initial sync, while the boots ran", float64(endN-startN)/endAt.Sub(startAt).Seconds())
@@ -159,9 +162,11 @@ func runContention(ctx context.Context, o *opener, mail *loopMail, nmsg, boots i
 	mu.Unlock()
 
 	time.Sleep(200 * time.Millisecond) // the trace's last flush
-	calls := readSQL(b.sqlPath)
+	calls, busy := readSQLBusy(b.sqlPath)
 	from, to := wins[0].from, wins[len(wins)-1].to
 	sums := sumByCall(calls, from, to)
+	addLaneMetrics(rep, prefix, calls, busy, from, to)
+	allLanes := lanesIn(calls)
 	var laWait, laExec []float64
 	for _, s := range sums {
 		if s.Client == "perfbench-probe" && s.Method == "ListAccounts" {
@@ -169,7 +174,7 @@ func runContention(ctx context.Context, o *opener, mail *loopMail, nmsg, boots i
 			laExec = append(laExec, ms(s.Exec))
 		}
 	}
-	rep.add(prefix+".probe_list_accounts_sql_wait_ms", "ms", "lower", "per ListAccounts call: its statements' time queued behind other work on the one SQLite connection", laWait...)
+	rep.add(prefix+".probe_list_accounts_sql_wait_ms", "ms", "lower", "per ListAccounts call: its statements' time queued behind other work on their SQLite connection", laWait...)
 	rep.add(prefix+".probe_list_accounts_sql_exec_ms", "ms", "lower", "per ListAccounts call: its statements' time running", laExec...)
 	var qWait, qExec []float64
 	for _, w := range wins {
@@ -180,11 +185,15 @@ func runContention(ctx context.Context, o *opener, mail *loopMail, nmsg, boots i
 				exec += s.Exec
 			}
 		}
-		rep.add(prefix+".boot_sql_wait_ms", "ms", "lower", "per boot: the interface's statements' time queued for the SQLite connection", ms(wait))
+		rep.add(prefix+".boot_sql_wait_ms", "ms", "lower", "per boot: the interface's statements' time queued for their SQLite connection", ms(wait))
 		rep.add(prefix+".boot_sql_exec_ms", "ms", "lower", "per boot: the interface's statements' time running", ms(exec))
-		bg, all := busyShare(calls, w.from, w.to)
-		rep.add(prefix+".boot_conn_busy_background_pct", "%", "lower", "per boot: share of the boot the connection ran the backend's own work (sync, rules, labels)", bg*100)
-		rep.add(prefix+".boot_conn_busy_pct", "%", "lower", "per boot: share of the boot the connection was busy at all", all*100)
+		lanes := busyShare(calls, w.from, w.to)
+		bg, all := busiest(lanes)
+		rep.add(prefix+".boot_conn_busy_background_pct", "%", "lower", "per boot: share of the boot the busiest connection ran the backend's own work (sync, rules, labels)", bg*100)
+		rep.add(prefix+".boot_conn_busy_pct", "%", "lower", "per boot: share of the boot the busiest connection was busy at all", all*100)
+		for _, l := range allLanes {
+			rep.add(prefix+".boot_conn_busy_pct_"+l, "%", "lower", "per boot: share of the boot connection "+l+" was busy (W: the writer, I0/I1: the interactive readers, B: the background reader)", lanes[l].All*100)
+		}
 	}
 	for _, c := range calls {
 		if c.Client == "perfbench-ui" && !c.Start.Before(from) && !c.Start.After(to) {
@@ -212,7 +221,7 @@ func runContention(ctx context.Context, o *opener, mail *loopMail, nmsg, boots i
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	line := prefix + ": connection time by client during the boots:"
+	line := prefix + ": connection time by client during the boots (all connections):"
 	for _, k := range keys {
 		line += fmt.Sprintf(" %s %.0f ms;", k, ms(byClient[k]))
 	}

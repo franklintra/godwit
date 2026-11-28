@@ -88,6 +88,8 @@ func runWindow(ctx context.Context, o *opener, mail *loopMail, meta fixtureMeta,
 		return err
 	}
 	defer func() { b.stop(); b.cleanup() }()
+	wal := walWatch(o.data)
+	defer wal()
 	setup, _, err := b.dialUI(ctx, 10*time.Minute, nil, "perfbench-setup")
 	if err != nil {
 		return err
@@ -390,11 +392,12 @@ func runWindow(ctx context.Context, o *opener, mail *loopMail, meta fixtureMeta,
 		}
 		roundSpans = append(roundSpans, roundSpan{from, time.Now()})
 		done++
-		log.Printf("%s: round %d done in %s (%d stored)", prefix, r+1, time.Since(from).Round(time.Millisecond), stored())
+		log.Printf("%s: round %d done in %s (%d stored, WAL %.0f MB)", prefix, r+1, time.Since(from).Round(time.Millisecond), stored(), float64(fileSize(filepath.Join(o.data, "godwit.db-wal")))/1e6)
 		time.Sleep(time.Second)
 	}
 	end()
 	status.close()
+	addWAL(rep, prefix, "the window part (sync, window, probes)", wal)
 	endN, endAt := stored(), time.Now()
 	rep.add(prefix+".rounds_during_sync", "count", "higher", "probe rounds that started while the sync still wrote", float64(done))
 	rep.add(prefix+".sync_msgs_per_s", "msg/s", "higher", "the account's initial sync while the window was open and probed", float64(endN-startN)/endAt.Sub(startAt).Seconds())
@@ -403,7 +406,7 @@ func runWindow(ctx context.Context, o *opener, mail *loopMail, meta fixtureMeta,
 	}
 
 	time.Sleep(200 * time.Millisecond) // the trace's last flush
-	calls := readSQL(b.sqlPath)
+	calls, busy := readSQLBusy(b.sqlPath)
 	waits := map[string][2]time.Duration{}
 	for _, sp := range spans {
 		var wait, exec time.Duration
@@ -413,21 +416,27 @@ func runWindow(ctx context.Context, o *opener, mail *loopMail, meta fixtureMeta,
 				exec += c.Exec
 			}
 		}
-		rep.add(prefix+"."+sp.group+"_sql_wait_ms", "ms", "lower", "per "+sp.group+" probe: its statements' time queued for the one SQLite connection", ms(wait))
+		rep.add(prefix+"."+sp.group+"_sql_wait_ms", "ms", "lower", "per "+sp.group+" probe: its statements' time queued for their SQLite connection", ms(wait))
 		rep.add(prefix+"."+sp.group+"_sql_exec_ms", "ms", "lower", "per "+sp.group+" probe: its statements' time running", ms(exec))
 		w := waits[sp.group]
 		waits[sp.group] = [2]time.Duration{w[0] + wait, w[1] + exec}
 	}
+	allLanes := lanesIn(calls)
 	for _, rs := range roundSpans {
-		bg, all := busyShare(calls, rs.from, rs.to)
-		rep.add(prefix+".conn_busy_pct", "%", "lower", "per round: share of the round the one SQLite connection was busy at all", all*100)
-		rep.add(prefix+".conn_busy_background_pct", "%", "lower", "per round: share of the round the connection ran the backend's own work (sync, rules, labels)", bg*100)
+		lanes := busyShare(calls, rs.from, rs.to)
+		bg, all := busiest(lanes)
+		rep.add(prefix+".conn_busy_pct", "%", "lower", "per round: share of the round the busiest SQLite connection was busy at all", all*100)
+		rep.add(prefix+".conn_busy_background_pct", "%", "lower", "per round: share of the round the busiest connection ran the backend's own work (sync, rules, labels)", bg*100)
+		for _, l := range allLanes {
+			rep.add(prefix+".conn_busy_pct_"+l, "%", "lower", "per round: share of the round connection "+l+" was busy (W: the writer, I0/I1: the interactive readers, B: the background reader)", lanes[l].All*100)
+		}
 		sh := clientShare(calls, rs.from, rs.to)
-		rep.add(prefix+".conn_busy_window_pct", "%", "lower", "per round: share of the round the connection ran the window's own reloads (SavedViews, counts, lists, avatars)", sh[clientWindow]*100)
-		rep.add(prefix+".conn_busy_user_pct", "%", "lower", "per round: share of the round the connection ran the probes' statements", sh[clientUser]*100)
+		rep.add(prefix+".conn_busy_window_pct", "%", "lower", "per round: connection time the window's own reloads took (SavedViews, counts, lists, avatars), summed over connections, as a share of the round", sh[clientWindow]*100)
+		rep.add(prefix+".conn_busy_user_pct", "%", "lower", "per round: connection time the probes' statements took, summed over connections, as a share of the round", sh[clientUser]*100)
 	}
 	from, to := roundSpans[0].from, roundSpans[len(roundSpans)-1].to
-	line := fmt.Sprintf("%s: connection time by client over the rounds (%s):", prefix, to.Sub(from).Round(time.Millisecond))
+	addLaneMetrics(rep, prefix, calls, busy, from, to)
+	line := fmt.Sprintf("%s: connection time by client over the rounds (%s, summed over connections):", prefix, to.Sub(from).Round(time.Millisecond))
 	sh := clientShare(calls, from, to)
 	keys := make([]string, 0, len(sh))
 	for k := range sh {
@@ -595,8 +604,9 @@ func listSenders(ctx context.Context, c *uiclient.Client, n int) ([]string, erro
 	return out, nil
 }
 
-// clientShare is the share of [from, to] the connection ran each client's
-// statements ("backend" for the backend's own work).
+// clientShare is the connection time each client's statements took in
+// [from, to], summed over connections, as a share of the span ("backend"
+// for the backend's own work).
 func clientShare(calls []sqlCall, from, to time.Time) map[string]float64 {
 	span := to.Sub(from)
 	out := map[string]float64{}

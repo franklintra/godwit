@@ -59,10 +59,15 @@ func sortedSums(by map[string]*callerSum) []callerSum {
 // heldWhile answers "what held the connection while these statements
 // waited": for each statement sel picks (inside [from, to]), it takes
 // the time it queued and sums, per caller, the other statements that ran
-// in that time. calls must be sorted by end (readSQL does it); their
-// running intervals do not overlap, as there is one connection.
+// on its connection in that time. calls must be sorted by end (readSQL
+// does it); within one connection their running intervals do not
+// overlap.
 func heldWhile(calls []sqlCall, from, to time.Time, sel func(sqlCall) bool) (waited time.Duration, held []callerSum) {
 	by := map[string]*callerSum{}
+	var longest time.Duration
+	for _, c := range calls {
+		longest = max(longest, c.Exec)
+	}
 	for i, c := range calls {
 		if !sel(c) || c.Start.Before(from) || c.Start.After(to) || c.Wait <= 0 {
 			continue
@@ -71,13 +76,16 @@ func heldWhile(calls []sqlCall, from, to time.Time, sel func(sqlCall) bool) (wai
 		a, b := c.Start, c.Start.Add(c.Wait)
 		j := sort.Search(len(calls), func(k int) bool { return calls[k].End.After(a) })
 		for ; j < len(calls); j++ {
-			if j == i {
+			o := calls[j]
+			if o.End.Sub(b) > longest { // sorted by end: nothing later starts before b
+				break
+			}
+			if j == i || o.Lane != c.Lane {
 				continue
 			}
-			o := calls[j]
 			s := o.End.Add(-o.Exec)
 			if !s.Before(b) {
-				break
+				continue
 			}
 			lo, hi := s, o.End
 			if lo.Before(a) {
@@ -102,13 +110,13 @@ func heldWhile(calls []sqlCall, from, to time.Time, sel func(sqlCall) bool) (wai
 }
 
 // profileNotes is the window part's profile: per caller, what ran on the
-// connection over the rounds, and what held it while a message open or a
-// view switch waited.
+// connections over the rounds, and what held a probe's connection while
+// a message open or a view switch waited.
 func profileNotes(prefix string, calls []sqlCall, from, to time.Time, top int) []string {
 	var out []string
 	span := to.Sub(from)
 	sums := byCaller(calls, from, to)
-	line := fmt.Sprintf("%s: profile: connection time per caller over the rounds (%s):", prefix, span.Round(time.Millisecond))
+	line := fmt.Sprintf("%s: profile: connection time per caller over the rounds (%s, all connections):", prefix, span.Round(time.Millisecond))
 	for i, s := range sums {
 		if i == top {
 			break
@@ -116,6 +124,22 @@ func profileNotes(prefix string, calls []sqlCall, from, to time.Time, top int) [
 		line += fmt.Sprintf(" %s %.0f ms in %d (queued %.0f ms);", s.who, ms(s.exec), s.n, ms(s.wait))
 	}
 	out = append(out, line)
+	for _, l := range lanesIn(calls) {
+		var sub []sqlCall
+		for _, c := range calls {
+			if c.Lane == l {
+				sub = append(sub, c)
+			}
+		}
+		line := fmt.Sprintf("%s: profile: connection %s per caller:", prefix, l)
+		for i, s := range byCaller(sub, from, to) {
+			if i == top {
+				break
+			}
+			line += fmt.Sprintf(" %s %.0f ms in %d (queued %.0f ms);", s.who, ms(s.exec), s.n, ms(s.wait))
+		}
+		out = append(out, line)
+	}
 	for _, g := range []struct {
 		name    string
 		methods []string
@@ -146,7 +170,7 @@ func profileNotes(prefix string, calls []sqlCall, from, to time.Time, top int) [
 			}
 			parts = append(parts, fmt.Sprintf("%s %.0f ms (%.0f%%)", h.who, ms(h.exec), 100*float64(h.exec)/float64(waited)))
 		}
-		out = append(out, fmt.Sprintf("%s: profile: %s queued %.0f ms in all; the connection was held by: %s", prefix, g.name, ms(waited), strings.Join(parts, "; ")))
+		out = append(out, fmt.Sprintf("%s: profile: %s queued %.0f ms in all; their connections were held by: %s", prefix, g.name, ms(waited), strings.Join(parts, "; ")))
 	}
 	return out
 }

@@ -333,6 +333,8 @@ func measureSession(ctx context.Context, c runConfig, o *opener, meta fixtureMet
 		return err
 	}
 	defer func() { d.close(); b.stop(); b.cleanup() }()
+	wal := walWatch(o.data)
+	defer wal()
 	addMem(rep, "first_list", "when the first list shows", r.Mem, r.GoMem)
 	hc, _, err := b.dialUI(ctx, time.Minute, nil, "perfbench-hot") // the hot paths' own connection: the App's stays idle
 	if err != nil {
@@ -380,6 +382,7 @@ func measureSession(ctx context.Context, c runConfig, o *opener, meta fixtureMet
 		m, _ := readMem(b.pid)
 		addMem(rep, "idle_end", "after the idle window", m, b.goMem())
 	}
+	addWAL(rep, "session", "the session (views, hot paths, idle)", wal)
 	m, _ := readMem(b.pid)
 	rep.add("mem.session.peak_rss_mb", "MB", "lower", "backend VmHWM over the session (start, views, hot paths, idle)", float64(m.HWMKB)/1024)
 	g := readGC(b.logPath)
