@@ -285,9 +285,11 @@ func (s *Service) ContactAvatars(ctx context.Context, addrs []string) ([]Avatar,
 }
 
 // contactAvatarsAtOnce bounds the addresses ContactAvatars resolves at
-// once: a remote avatar (BIMI, favicon, Gravatar) waits on the network, the
-// database reads queue anyway.
-const contactAvatarsAtOnce = 4
+// once. A remote avatar (BIMI, favicon, Gravatar) waits on the network, and
+// each address's few statements queue on the database behind other work:
+// one address after another made the call wait as long as the twelve calls
+// it replaces together (perfbench window, during a sync).
+const contactAvatarsAtOnce = 16
 
 // avatarLeftRoles are the folders whose mail ContactAvatar does not take a
 // sender's avatar from.
