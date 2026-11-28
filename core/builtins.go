@@ -207,11 +207,11 @@ func (s *Service) setBuiltinEnabled(ctx context.Context, name string, on bool) e
 // builtinTags are the tags of the built-in plugins that are on. They read
 // the stored body, links intact: the plugins' copy is sanitized.
 func (s *Service) builtinTags(ctx context.Context, id int64) ([]Tag, error) {
-	rows, err := s.db.Query(ctx, "SELECT subject, body_text, body_html, "+codeMailCond+" FROM messages m WHERE id = ?", id)
+	rows, err := s.db.Query(ctx, "SELECT subject, "+bodyText("m")+", "+bodyHTML("m")+", "+codeMailCond+" FROM messages m WHERE id = ?", id)
 	if err != nil || len(rows.Values) == 0 {
 		return nil, err
 	}
-	m := plugins.MailMessage{ID: id, Subject: store.Str(rows.Values[0][0]), Text: store.Str(rows.Values[0][1]), HTML: store.Str(rows.Values[0][2])}
+	m := plugins.MailMessage{ID: id, Subject: store.Str(rows.Values[0][0]), Text: store.BodyString(rows.Values[0][1]), HTML: store.BodyString(rows.Values[0][2])}
 	codeMail := store.Int(rows.Values[0][3]) != 0
 	var out []Tag
 	for _, b := range builtinPlugins {

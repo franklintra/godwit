@@ -42,7 +42,7 @@ func (s *Service) mailForModel(ctx context.Context, id int64) (Message, error) {
 	if err != nil {
 		return Message{}, err
 	}
-	rows, err := s.db.Query(ctx, "SELECT "+msgCols+", m.body_text, m.body_html, m.body_truncated FROM messages m WHERE m.id = ?", id)
+	rows, err := s.db.Query(ctx, "SELECT "+msgCols+", "+bodyText("m")+", "+bodyHTML("m")+", m.body_truncated FROM messages m WHERE m.id = ?", id)
 	if err != nil {
 		return Message{}, err
 	}
@@ -50,8 +50,8 @@ func (s *Service) mailForModel(ctx context.Context, id int64) (Message, error) {
 		return Message{}, fmt.Errorf("message %d %w", id, errMailNotFound)
 	}
 	r := rows.Values[0]
-	m := Message{MessageSummary: scanSummary(r), Text: store.Str(r[msgColCount]), Truncated: store.Int(r[msgColCount+2]) != 0}
-	if raw := store.Str(r[msgColCount+1]); raw != "" {
+	m := Message{MessageSummary: scanSummary(r), Text: store.BodyString(r[msgColCount]), Truncated: store.Int(r[msgColCount+2]) != 0}
+	if raw := store.BodyString(r[msgColCount+1]); raw != "" {
 		m.HTML, _, _ = gomail.Sanitize(raw, nil, false)
 	}
 	ar, err := s.db.Query(ctx, "SELECT id, filename, content_type, size FROM attachments WHERE message_id = ? ORDER BY id", id)

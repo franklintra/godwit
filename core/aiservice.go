@@ -286,7 +286,7 @@ func (s *Service) mailTarget(ctx context.Context, kind string, id int64) (int64,
 	if kind == "thread" {
 		where = "thread_id = ?"
 	}
-	rows, err := s.db.Query(ctx, "SELECT m.id, m.account_id, m.subject, m.body_text, m.body_html FROM messages m WHERE m."+where+" ORDER BY m.date, m.id", id)
+	rows, err := s.db.Query(ctx, "SELECT m.id, m.account_id, m.subject, "+bodyText("m")+", "+bodyHTML("m")+" FROM messages m WHERE m."+where+" ORDER BY m.date, m.id", id)
 	if err != nil {
 		return 0, nil, nil, err
 	}
@@ -297,7 +297,7 @@ func (s *Service) mailTarget(ctx context.Context, kind string, id int64) (int64,
 	var members []contentMember
 	for _, r := range rows.Values {
 		ids = append(ids, store.Int(r[0]))
-		sum := sha256.Sum256([]byte(store.Str(r[2]) + "\x00" + store.Str(r[3]) + "\x00" + store.Str(r[4])))
+		sum := sha256.Sum256([]byte(store.Str(r[2]) + "\x00" + store.BodyString(r[3]) + "\x00" + store.BodyString(r[4])))
 		members = append(members, contentMember{store.Int(r[0]), hex.EncodeToString(sum[:])})
 	}
 	slices.SortFunc(members, func(a, b contentMember) int { return cmp.Compare(a.ID, b.ID) })

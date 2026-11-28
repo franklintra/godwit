@@ -40,19 +40,24 @@ func InsertLocal(ctx context.Context, db *store.DB, accountID, folderID int64, p
 	args := append([]any{accountID}, plan.args...)
 	args = append(args, nullable(p.MessageID), nullable(p.InReplyTo), nullable(strings.Join(p.References, " ")), p.Subject, p.From,
 		jsonList(p.To), jsonList(p.Cc), nullable(p.ReplyTo), p.Date.Unix(), `\Seen`, size,
-		mail.Snippet(p.Text), p.Text, nullable(p.HTML), p.Truncated, len(p.Attachments) > 0, nullable(labelFP(p, size)),
+		mail.Snippet(p.Text), p.Truncated, len(p.Attachments) > 0, nullable(labelFP(p, size)),
 		p.ListUnsubscribe, p.ListUnsubscribePost, p.ListID, p.AutoSubmitted, p.Precedence, p.AuthenticationResults, secStatus, secReason, now, p.RuleSent, now, hash)
 	stmts := append(plan.pre, sqlite.Statement{
 		SQL: `INSERT INTO messages(account_id, thread_id,
 			message_id, in_reply_to, refs, subject, from_addr, to_addrs, cc_addrs, reply_to, date, flags, size,
-			snippet, body_text, body_html, body_truncated, has_attachments, label_fp, list_unsubscribe, list_unsubscribe_post, list_id, auto_submitted, precedence, auth_results, security_status, security_reason, security_scanned_at, rule_sent, labeled_at, content_hash)
-			VALUES (?, ` + plan.expr + `, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			snippet, body_truncated, has_attachments, label_fp, list_unsubscribe, list_unsubscribe_post, list_id, auto_submitted, precedence, auth_results, security_status, security_reason, security_scanned_at, rule_sent, labeled_at, content_hash)
+			VALUES (?, ` + plan.expr + `, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		Args: args,
+	}, sqlite.Statement{
+		// The body goes to its own table (ADR 0053), not inline: rowid of
+		// message_bodies is the message id, so last_insert_rowid() stays it.
+		SQL:  "INSERT INTO message_bodies(message_id, body_text, body_html) VALUES (last_insert_rowid(), ?, ?)",
+		Args: []any{p.Text, nullable(p.HTML)},
 	}, sqlite.Statement{
 		SQL:  `INSERT INTO message_locations(message_id, folder_id, shown, entered_at, date) VALUES (last_insert_rowid(), ?, 1, unixepoch(), ?)`,
 		Args: []any{folderID, p.Date.Unix()},
 	})
-	msgAt := len(stmts) - 2
+	msgAt := len(stmts) - 3
 	const msg = "(SELECT id FROM messages WHERE account_id = ? AND content_hash = ?)"
 	for _, at := range p.Attachments {
 		stmts = append(stmts, sqlite.Statement{

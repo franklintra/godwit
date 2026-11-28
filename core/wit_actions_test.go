@@ -270,7 +270,7 @@ func TestWitGetAllLinks(t *testing.T) {
 	msgID := addMessage(t, e.s, "With Links", "sender@example.com", "Plain text", htmlBody, 1_700_000_100)
 
 	// Directly query links
-	rows, err := e.s.db.Query(ctx, "SELECT body_html, body_text FROM messages WHERE id = ?", msgID)
+	rows, err := e.s.db.Query(ctx, "SELECT "+bodyHTML("messages")+", "+bodyText("messages")+" FROM messages WHERE id = ?", msgID)
 	require.NoError(t, err)
 	require.Len(t, rows.Values, 1)
 

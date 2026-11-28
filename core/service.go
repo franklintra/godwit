@@ -464,6 +464,7 @@ func New(ctx context.Context, opts Options) (*Service, error) {
 	s.startJanitor()
 	s.startExternalSync()
 	s.startReclaim()
+	s.startForkRewrites()
 	s.startImageRetention()
 	if err := s.startRules(ctx); err != nil {
 		s.Close()

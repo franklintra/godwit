@@ -653,7 +653,7 @@ type ruleMail struct {
 
 // ruleMail reads the message as it is now; ok is false when it is gone.
 func (s *Service) ruleMail(ctx context.Context, id int64) (m ruleMail, ok bool, err error) {
-	rows, err := s.db.Query(ctx, `SELECT m.from_addr, m.subject, m.body_text, m.to_addrs, m.cc_addrs, m.has_attachments,
+	rows, err := s.db.Query(ctx, `SELECT m.from_addr, m.subject, `+bodyText("m")+`, m.to_addrs, m.cc_addrs, m.has_attachments,
 		(SELECT json_group_array(v) FROM (SELECT CAST(f.id AS TEXT) AS v FROM message_locations l JOIN folders f ON f.id = l.folder_id WHERE l.message_id = m.id AND l.shown
 			UNION SELECT `+folderRoleSQL+` FROM message_locations l JOIN folders f ON f.id = l.folder_id WHERE l.message_id = m.id AND l.shown)),
 		(SELECT json_group_array(l.slug) FROM message_labels ml JOIN labels l ON l.id = ml.label_id WHERE ml.message_id = m.id AND ml.active = 1), m.date, m.account_id
@@ -662,7 +662,7 @@ func (s *Service) ruleMail(ctx context.Context, id int64) (m ruleMail, ok bool, 
 		return m, false, err
 	}
 	v := rows.Values[0]
-	return ruleMail{from: store.Str(v[0]), subject: store.Str(v[1]), body: store.Str(v[2]),
+	return ruleMail{from: store.Str(v[0]), subject: store.Str(v[1]), body: store.BodyString(v[2]),
 		to: append(jsonList(store.Str(v[3])), jsonList(store.Str(v[4]))...), attachments: store.Int(v[5]) != 0,
 		folders: jsonList(store.Str(v[6])), labels: jsonList(store.Str(v[7])),
 		date: store.Int(v[8]), account: store.Int(v[9]), now: s.clk().Now().Unix()}, true, nil

@@ -209,7 +209,7 @@ func (c RuleCondition) sql(now int64) (string, []any) {
 	case FieldSubject:
 		sql, args = textSQL("m.subject", "subject", c.Op, want, false)
 	case FieldBody:
-		sql, args = textSQL("m.body_text", "body", c.Op, want, false)
+		sql, args = textSQL(bodyText("m"), "body", c.Op, want, false)
 	case FieldAttachments:
 		return "COALESCE(m.has_attachments, 0) = ?", []any{b2i(c.Value == RuleYes)}
 	case FieldLabel:

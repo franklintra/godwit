@@ -465,7 +465,7 @@ func searchText(text string) (string, []any) {
 	case utf8.RuneCountInString(query) < 3:
 		// ponytail: full scan; use a bigram index when mailboxes get large.
 		like := likeArg(query)
-		cond = `(m.subject LIKE ? ESCAPE '\' OR m.from_addr LIKE ? ESCAPE '\' OR m.body_text LIKE ? ESCAPE '\' OR m.id IN (SELECT ml.message_id FROM message_labels ml JOIN labels l ON l.id = ml.label_id WHERE ml.active = 1 AND (l.name LIKE ? ESCAPE '\' OR l.slug LIKE ? ESCAPE '\')))`
+		cond = `(m.subject LIKE ? ESCAPE '\' OR m.from_addr LIKE ? ESCAPE '\' OR ` + bodyText("m") + ` LIKE ? ESCAPE '\' OR m.id IN (SELECT ml.message_id FROM message_labels ml JOIN labels l ON l.id = ml.label_id WHERE ml.active = 1 AND (l.name LIKE ? ESCAPE '\' OR l.slug LIKE ? ESCAPE '\')))`
 		args = []any{like, like, like, like, like}
 	default:
 		like := likeArg(query)
@@ -534,7 +534,7 @@ func searchFilter(q SearchQuery) (string, []any) {
 func (s *Service) RebuildSearchIndex(ctx context.Context) error {
 	_, err := s.db.Transaction(ctx, []sqlite.Statement{
 		{SQL: "DELETE FROM messages_fts"},
-		{SQL: "INSERT INTO messages_fts(rowid, subject, from_addr, body) SELECT id, subject, from_addr, body_text FROM messages"},
+		{SQL: "INSERT INTO messages_fts(rowid, subject, from_addr, body) SELECT id, subject, from_addr, " + bodyText("messages") + " FROM messages"},
 	})
 	return err
 }
@@ -559,14 +559,14 @@ func (s *Service) StoredHTML(ctx context.Context, id int64) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	rows, err := s.db.Query(ctx, "SELECT body_html FROM messages WHERE id = ?", id)
+	rows, err := s.db.Query(ctx, "SELECT "+bodyHTML("messages")+" FROM messages WHERE id = ?", id)
 	if err != nil {
 		return "", err
 	}
 	if len(rows.Values) == 0 {
 		return "", fmt.Errorf("message %d not found", id)
 	}
-	return store.Str(rows.Values[0][0]), nil
+	return store.BodyString(rows.Values[0][0]), nil
 }
 
 // GetMessage returns the message with sanitized HTML. Inline images are
@@ -604,14 +604,14 @@ func (s *Service) inlineImageRefs(ctx context.Context, id int64) ([]inlineImageR
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.db.Query(ctx, "SELECT body_html FROM messages WHERE id = ?", id)
+	rows, err := s.db.Query(ctx, "SELECT "+bodyHTML("messages")+" FROM messages WHERE id = ?", id)
 	if err != nil {
 		return nil, err
 	}
 	if len(rows.Values) == 0 {
 		return nil, fmt.Errorf("message %d not found", id)
 	}
-	raw := store.Str(rows.Values[0][0])
+	raw := store.BodyString(rows.Values[0][0])
 	ar, err := s.db.Query(ctx, "SELECT id, content_type, content_id FROM attachments WHERE message_id = ? ORDER BY id", id)
 	if err != nil {
 		return nil, err
@@ -717,7 +717,7 @@ func (s *Service) readMessage(ctx context.Context, id int64, loadRemoteImages, l
 	if err != nil {
 		return Message{}, err
 	}
-	rows, err := s.db.Query(ctx, "SELECT "+msgCols+", m.reply_to, m.body_text, m.body_html, m.body_truncated, "+msgInJunk+" FROM messages m WHERE m.id = ?", id)
+	rows, err := s.db.Query(ctx, "SELECT "+msgCols+", m.reply_to, "+bodyText("m")+", "+bodyHTML("m")+", m.body_truncated, "+msgInJunk+" FROM messages m WHERE m.id = ?", id)
 	if err != nil {
 		return Message{}, err
 	}
@@ -730,8 +730,8 @@ func (s *Service) readMessage(ctx context.Context, id int64, loadRemoteImages, l
 		return Message{}, err
 	}
 	summary := summaries[0]
-	msg := Message{MessageSummary: summary, ReplyTo: store.Str(r[msgColCount]), Text: store.Str(r[msgColCount+1]), Truncated: store.Int(r[msgColCount+3]) != 0, InJunk: store.Int(r[msgColCount+4]) != 0, AuthResults: summary.AuthResults, Security: summary.Security}
-	raw := store.Str(r[msgColCount+2])
+	msg := Message{MessageSummary: summary, ReplyTo: store.Str(r[msgColCount]), Text: store.BodyString(r[msgColCount+1]), Truncated: store.Int(r[msgColCount+3]) != 0, InJunk: store.Int(r[msgColCount+4]) != 0, AuthResults: summary.AuthResults, Security: summary.Security}
+	raw := store.BodyString(r[msgColCount+2])
 	ar, err := s.db.Query(ctx, "SELECT id, filename, content_type, size, inline, content_id FROM attachments WHERE message_id = ? ORDER BY id", id)
 	if err != nil {
 		return Message{}, err

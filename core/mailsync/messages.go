@@ -69,21 +69,26 @@ func importMessage(ctx context.Context, db *store.DB, a *account, f *folder, m b
 	args := append([]any{a.id}, plan.args...)
 	args = append(args, nullable(p.MessageID), nullable(p.InReplyTo), nullable(strings.Join(p.References, " ")), p.Subject, p.From,
 		jsonList(p.To), jsonList(p.Cc), nullable(p.ReplyTo), p.Date.Unix(), flagString(m.Flags), size,
-		mail.Snippet(p.Text), p.Text, nullable(p.HTML), p.Truncated, len(p.Attachments) > 0, nullable(labelFP(p, size)),
+		mail.Snippet(p.Text), p.Truncated, len(p.Attachments) > 0, nullable(labelFP(p, size)),
 		p.ListUnsubscribe, p.ListUnsubscribePost, p.ListID, p.AutoSubmitted, p.Precedence, p.AuthenticationResults, secStatus, secReason, secScanned, verifyDKIM, p.RuleSent, nullable(m.ServerID), a.id, hash, hash)
 	stmts := append(plan.pre, sqlite.Statement{
 		SQL: `INSERT INTO messages(account_id, thread_id,
 			message_id, in_reply_to, refs, subject, from_addr, to_addrs, cc_addrs, reply_to, date, flags, size,
-			snippet, body_text, body_html, body_truncated, has_attachments, label_fp, list_unsubscribe, list_unsubscribe_post, list_id, auto_submitted, precedence, auth_results, security_status, security_reason, security_scanned_at, security_verify_dkim, rule_sent, server_id, content_hash)
-			VALUES (?, ` + plan.expr + `, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+			snippet, body_truncated, has_attachments, label_fp, list_unsubscribe, list_unsubscribe_post, list_id, auto_submitted, precedence, auth_results, security_status, security_reason, security_scanned_at, security_verify_dkim, rule_sent, server_id, content_hash)
+			VALUES (?, ` + plan.expr + `, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			CASE WHEN EXISTS (SELECT 1 FROM messages WHERE account_id = ? AND content_hash = ?) THEN NULL ELSE ? END)`,
 		Args: args,
+	}, sqlite.Statement{
+		// The body goes to its own table (ADR 0053), not inline: rowid of
+		// message_bodies is the message id, so last_insert_rowid() stays it.
+		SQL:  "INSERT INTO message_bodies(message_id, body_text, body_html) VALUES (last_insert_rowid(), ?, ?)",
+		Args: []any{p.Text, nullable(p.HTML)},
 	}, sqlite.Statement{
 		SQL: `INSERT INTO message_locations(message_id, folder_id, shown, server_ref, entered_at, date)
 			VALUES (last_insert_rowid(), ?, 1, ?, unixepoch(), ?)`,
 		Args: []any{f.id, ref, p.Date.Unix()},
 	})
-	msgAt := len(stmts) - 2
+	msgAt := len(stmts) - 3
 	for _, at := range p.Attachments {
 		stmts = append(stmts, sqlite.Statement{
 			SQL: `INSERT INTO attachments(message_id, part, encoding, charset, filename, content_type, size, content_id, inline)

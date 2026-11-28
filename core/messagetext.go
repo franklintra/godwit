@@ -28,7 +28,7 @@ func (s *Service) GetMessageText(ctx context.Context, id int64) (MessageText, er
 	if err != nil {
 		return MessageText{}, err
 	}
-	rows, err := s.db.Query(ctx, "SELECT "+msgCols+", m.account_id, m.reply_to, m.body_text, m.body_truncated, m.body_html FROM messages m WHERE m.id = ?", id)
+	rows, err := s.db.Query(ctx, "SELECT "+msgCols+", m.account_id, m.reply_to, "+bodyText("m")+", m.body_truncated, "+bodyHTML("m")+" FROM messages m WHERE m.id = ?", id)
 	if err != nil {
 		return MessageText{}, err
 	}
@@ -38,8 +38,8 @@ func (s *Service) GetMessageText(ctx context.Context, id int64) (MessageText, er
 	r := rows.Values[0]
 	m := MessageText{MessageSummary: scanSummary(r), AccountID: store.Int(r[msgColCount]), ReplyTo: store.Str(r[msgColCount+1]),
 		Truncated: store.Int(r[msgColCount+3]) != 0}
-	body := Message{Text: store.Str(r[msgColCount+2])}
-	if raw := store.Str(r[msgColCount+4]); raw != "" {
+	body := Message{Text: store.BodyString(r[msgColCount+2])}
+	if raw := store.BodyString(r[msgColCount+4]); raw != "" {
 		body.HTML, _, _ = mail.Sanitize(raw, nil, false) // as mailForModel: the HTML the reader shows
 	}
 	m.Text = modelBody(body)

@@ -347,7 +347,7 @@ func signatureHTML(sig string, cids map[string]bool, delim bool) string {
 
 // sourceMessage rebuilds what replying and forwarding need from the stored message.
 func (s *Service) sourceMessage(ctx context.Context, accountID, id int64) (*mail.Parsed, error) {
-	rows, err := s.db.Query(ctx, `SELECT message_id, subject, from_addr, reply_to, to_addrs, cc_addrs, date, body_text, body_html
+	rows, err := s.db.Query(ctx, `SELECT message_id, subject, from_addr, reply_to, to_addrs, cc_addrs, date, `+bodyText("messages")+`, `+bodyHTML("messages")+`
 		FROM messages WHERE id = ? AND (account_id = ? OR account_id IN (SELECT id FROM accounts WHERE kind = ?))`, id, accountID, KindLocalArchive) // a local archive's mail is answered from another account (ADR 0036)
 	if err != nil {
 		return nil, err
@@ -358,7 +358,7 @@ func (s *Service) sourceMessage(ctx context.Context, accountID, id int64) (*mail
 	r := rows.Values[0]
 	return &mail.Parsed{MessageID: store.Str(r[0]), Subject: store.Str(r[1]), From: store.Str(r[2]), ReplyTo: store.Str(r[3]),
 		To: jsonList(store.Str(r[4])), Cc: jsonList(store.Str(r[5])), Date: time.Unix(store.Int(r[6]), 0),
-		Text: store.Str(r[7]), HTML: store.Str(r[8])}, nil
+		Text: store.BodyString(r[7]), HTML: store.BodyString(r[8])}, nil
 }
 
 func (s *Service) copyAttachments(ctx context.Context, draftID, messageID int64) error {

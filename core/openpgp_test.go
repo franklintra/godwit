@@ -294,7 +294,7 @@ func TestOpenPGPMessageDecrypt(t *testing.T) {
 	assert.Equal(t, "good", v.Signature.Detail)
 
 	// Nothing decrypted is stored or searchable.
-	assert.Zero(t, e.count(t, "SELECT count(*) FROM messages WHERE body_text LIKE '%pelican%' OR body_html LIKE '%pelican%' OR snippet LIKE '%pelican%'"))
+	assert.Zero(t, e.count(t, "SELECT count(*) FROM messages m WHERE "+bodyText("m")+" LIKE '%pelican%' OR "+bodyHTML("m")+" LIKE '%pelican%' OR snippet LIKE '%pelican%'"))
 	found, err := e.s.Search(bg, e.acc.ID, "pelican", 10)
 	require.NoError(t, err)
 	assert.Empty(t, found)

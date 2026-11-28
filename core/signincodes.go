@@ -29,7 +29,7 @@ func (s *Service) RecentSignInCodes(ctx context.Context, now time.Time) ([]SignI
 	}
 	since := now.Add(-15 * time.Minute).Unix()
 	dated := now.Add(-24 * time.Hour).Unix() // late delivery or a slow sender clock still counts; a moved old mail does not
-	rows, err := s.db.Query(ctx, `SELECT m.id, m.subject, m.from_addr, m.body_text, m.body_html, MAX(e.created_at), `+codeMailCond+`
+	rows, err := s.db.Query(ctx, `SELECT m.id, m.subject, m.from_addr, `+bodyText("m")+`, `+bodyHTML("m")+`, MAX(e.created_at), `+codeMailCond+`
 		FROM events_log e JOIN messages m ON m.id = e.message_id JOIN folders f ON f.id = `+shownFolder+`
 		WHERE e.type = 'message.received' AND e.created_at > ? AND m.date > ? AND f.role = 'inbox'
 		GROUP BY m.id ORDER BY MAX(e.created_at) DESC, m.id DESC`, since, dated)
@@ -38,7 +38,7 @@ func (s *Service) RecentSignInCodes(ctx context.Context, now time.Time) ([]SignI
 	}
 	var out []SignInCode
 	for _, row := range rows.Values {
-		subject, text, html := store.Str(row[1]), store.Str(row[3]), store.Str(row[4])
+		subject, text, html := store.Str(row[1]), store.BodyString(row[3]), store.BodyString(row[4])
 		code, link, kind := signInFinds(subject, text, html, store.Int(row[6]) != 0)
 		if code != "" || link != "" {
 			out = append(out, SignInCode{MessageID: store.Int(row[0]), Code: code, Link: link, LinkKind: kind, From: store.Str(row[2]), ReceivedAt: time.Unix(store.Int(row[5]), 0)})

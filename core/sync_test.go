@@ -210,16 +210,16 @@ func TestSyncNewMessages(t *testing.T) {
 	}
 
 	assert.Equal(t, 3, e.count(t, "SELECT count(*) FROM messages"))
-	r := e.rows(t, "SELECT body_text, snippet, subject, from_addr, has_attachments FROM messages WHERE message_id = 'p@x'")
+	r := e.rows(t, "SELECT "+bodyText("messages")+", snippet, subject, from_addr, has_attachments FROM messages WHERE message_id = 'p@x'")
 	assert.Equal(t, "the quarterly numbers are in", strings.TrimSpace(store.Str(r[0][0])))
 	assert.Equal(t, "the quarterly numbers are in", store.Str(r[0][1]))
 	assert.Equal(t, "plain", store.Str(r[0][2]))
 	assert.Equal(t, "Bob <bob@example.com>", store.Str(r[0][3]))
 	assert.Zero(t, store.Int(r[0][4]))
-	r = e.rows(t, "SELECT body_text, body_html, snippet FROM messages WHERE message_id = 'h@x'")
+	r = e.rows(t, "SELECT "+bodyText("messages")+", "+bodyHTML("messages")+", snippet FROM messages WHERE message_id = 'h@x'")
 	assert.Contains(t, store.Str(r[0][1]), "<b>marmalade</b>")
 	assert.Equal(t, "Hello marmalade world", store.Str(r[0][2]))
-	r = e.rows(t, "SELECT body_text, has_attachments, id FROM messages WHERE message_id = 'a1@x'")
+	r = e.rows(t, "SELECT "+bodyText("messages")+", has_attachments, id FROM messages WHERE message_id = 'a1@x'")
 	assert.Equal(t, "see é attached", strings.TrimSpace(store.Str(r[0][0])))
 	assert.Equal(t, int64(1), store.Int(r[0][1]))
 	att := e.rows(t, "SELECT message_id, filename, part, encoding, cache_path FROM attachments")
@@ -634,7 +634,7 @@ func TestSyncHugeBodyIsBounded(t *testing.T) {
 	e.sync(t)
 	assert.Less(t, e.im.BytesSent()-before, int64(48<<10), "two 4 KB slices, not 750 KB")
 	for _, id := range []string{"big@x", "b64@x"} {
-		r := e.rows(t, "SELECT body_text, body_truncated FROM messages WHERE message_id = ?", id)
+		r := e.rows(t, "SELECT "+bodyText("messages")+", body_truncated FROM messages WHERE message_id = ?", id)
 		require.Len(t, r, 1, id)
 		body := store.Str(r[0][0])
 		assert.Equal(t, int64(1), store.Int(r[0][1]), id)

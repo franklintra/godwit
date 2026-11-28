@@ -26,7 +26,7 @@ func (e *syncEnv) oldRows(t *testing.T, id int64) map[string]int64 {
 			continue
 		}
 		res, err := e.s.db.Execute(bg, `INSERT INTO messages(account_id, thread_id, message_id, subject, from_addr, to_addrs, date, flags, size, snippet, body_text, label_fp)
-			SELECT account_id, thread_id, message_id, subject, from_addr, to_addrs, date, flags, size, snippet, body_text, label_fp FROM messages WHERE id = ?`, id)
+			SELECT account_id, thread_id, message_id, subject, from_addr, to_addrs, date, flags, size, snippet, `+bodyText("messages")+`, label_fp FROM messages WHERE id = ?`, id)
 		require.NoError(t, err)
 		_, err = e.s.db.Execute(bg, "UPDATE message_locations SET message_id = ? WHERE message_id = ? AND folder_id = ?", res.LastInsertID, id, r[0])
 		require.NoError(t, err)

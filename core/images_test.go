@@ -202,8 +202,10 @@ func TestPrefetchAvatarBodyReadFailure(t *testing.T) {
 	good := avatarPNG(t)
 	f := newAvatarFixture(t, func(w http.ResponseWriter, r *http.Request) { w.Write(good) })
 	id := addMessage(t, f.s, "s", "bob@example.com", "plain", "", 1)
-	// Fail only the body read; sender/account data remains available.
-	_, err := f.s.db.Execute(t.Context(), "ALTER TABLE messages DROP COLUMN body_html")
+	// Fail only the body read; sender/account data remains available. The
+	// body table's triggers name it, so it is renamed, not dropped: the
+	// read finds no message_bodies.
+	_, err := f.s.db.Execute(t.Context(), "ALTER TABLE message_bodies RENAME TO message_bodies_gone")
 	require.NoError(t, err)
 	f.s.bus.Publish(events.Event{Type: events.MessageReceived, MessageIDs: []int64{id}})
 	require.Eventually(t, func() bool {

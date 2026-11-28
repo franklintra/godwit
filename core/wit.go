@@ -1253,21 +1253,21 @@ func (s *Service) getAllLinks(ctx context.Context, raw json.RawMessage) (any, er
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.db.Query(ctx, "SELECT body_html, body_text FROM messages WHERE id = ?", msgID)
+	rows, err := s.db.Query(ctx, "SELECT "+bodyHTML("messages")+", "+bodyText("messages")+" FROM messages WHERE id = ?", msgID)
 	if err != nil {
 		return nil, err
 	}
 	if len(rows.Values) == 0 {
 		return nil, fmt.Errorf("mail %d %w", in.ID, errMailNotFound)
 	}
-	bodyHTML := store.Str(rows.Values[0][0])
-	bodyText := store.Str(rows.Values[0][1])
+	rawHTML := store.BodyString(rows.Values[0][0])
+	rawText := store.BodyString(rows.Values[0][1])
 
 	seen := make(map[string]bool)
 	var links []mailLink
 
-	if bodyHTML != "" {
-		doc, err := html.Parse(strings.NewReader(bodyHTML))
+	if rawHTML != "" {
+		doc, err := html.Parse(strings.NewReader(rawHTML))
 		if err == nil {
 			var extract func(*html.Node)
 			extract = func(n *html.Node) {
@@ -1301,9 +1301,9 @@ func (s *Service) getAllLinks(ctx context.Context, raw json.RawMessage) (any, er
 		}
 	}
 
-	if len(links) == 0 && bodyText != "" {
+	if len(links) == 0 && rawText != "" {
 		re := regexp.MustCompile(`https?://[^\s<>"]+`)
-		matches := re.FindAllString(bodyText, -1)
+		matches := re.FindAllString(rawText, -1)
 		for _, m := range matches {
 			if !seen[m] {
 				seen[m] = true

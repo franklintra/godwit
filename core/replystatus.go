@@ -409,7 +409,7 @@ func (s *Service) dropMassMail(ctx context.Context, out map[int64]replyStatus, s
 	args := []any{intList(ids)}
 	has := make([]string, len(massMailWords))
 	for i, w := range massMailWords {
-		has[i] = "instr(lower(COALESCE(body_text, '')), ?) > 0"
+		has[i] = "instr(lower(COALESCE(" + bodyText("messages") + ", '')), ?) > 0"
 		args = append(args, w)
 	}
 	rows, err := s.db.Query(ctx, "SELECT id FROM messages WHERE id IN (SELECT value FROM json_each(?)) AND ("+strings.Join(has, " OR ")+")", args...)

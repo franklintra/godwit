@@ -178,11 +178,11 @@ func (s *Service) prefetchImages(ctx context.Context, message int64) {
 	if ok, err := s.ImagesAllowed(ctx, message); err != nil || !ok {
 		return
 	}
-	rows, err = s.db.Query(ctx, "SELECT body_html FROM messages WHERE id = ?", message)
-	if err != nil || len(rows.Values) == 0 || store.Str(rows.Values[0][0]) == "" {
+	rows, err = s.db.Query(ctx, "SELECT "+bodyHTML("messages")+" FROM messages WHERE id = ?", message)
+	if err != nil || len(rows.Values) == 0 || store.BodyString(rows.Values[0][0]) == "" {
 		return
 	}
-	safe, _, _ := gomail.Sanitize(store.Str(rows.Values[0][0]), nil, true)
+	safe, _, _ := gomail.Sanitize(store.BodyString(rows.Values[0][0]), nil, true)
 	urls := gomail.RemoteImages(safe)
 	if len(urls) > prefetchImages {
 		urls = urls[:prefetchImages]
