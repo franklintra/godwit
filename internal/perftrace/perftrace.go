@@ -6,10 +6,18 @@
 // when each step of a backend's start ended.
 //
 // GODWIT_SQL_TRACE names a file that gets one tab-separated line per
-// database call: start and end (unix ns), kind (q, x, t), the Local API
-// call it serves ("" for background work) and the statement's start.
-// Every call waits for the one SQLite connection, so a reader recovers
-// each call's wait from the order of the ends.
+// database call: start and end (unix ns), kind, the Local API call it
+// serves ("" for background work) and the statement's start. The kind is
+// <call>@<conn>:<lane> (core/store's lanes, ADR 0052): call is q, x or
+// t<n> (a query, an execute, a transaction of n statements), conn the
+// connection that ran it (W, I0, I1, B), lane the caller's class (i
+// interactive, u ui-background, b background). Start is when the call
+// asked for its connection, so the wait for it is included. Calls on one
+// connection run one at a time, so a reader recovers each call's wait
+// from the order of the ends within its connection. Two kinds are not
+// calls: busy@<conn> spans the time a statement retried SQLITE_BUSY
+// inside its call, ck@W a checkpoint of the store's own. A trace from
+// before ADR 0052 has bare kinds (q, x, t<n>), all on one connection.
 package perftrace
 
 import (

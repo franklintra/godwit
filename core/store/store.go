@@ -21,11 +21,17 @@ import (
 // ErrNewerDatabase is returned when the database was written by a newer Godwit.
 var ErrNewerDatabase = errors.New("store: database schema is newer than this version")
 
-// DB wraps a mygo sqlite connection.
+// DB is Godwit's database: a writer connection (the embedded mygo
+// sqlite.DB) and, once Open has migrated, read-only connections beside it
+// that Query sends plain SELECTs to by the caller's lane (lanes.go,
+// ADR 0052).
 type DB struct {
 	*sqlite.DB
+	lanes   *lanes
 	syncMu  sync.Mutex
 	syncing int
+	closed  sync.Once
+	errC    error
 }
 
 var isTest = testing.Testing
@@ -35,53 +41,121 @@ func Open(ctx context.Context, path string) (*DB, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	raw, err := sqlite.Open(ctx, path, sqlite.OpenOptions{})
+	// No busy wait in SQLite: retryBusy waits in Go, cancelable and counted.
+	raw, err := sqlite.Open(ctx, path, sqlite.OpenOptions{BusyTimeout: -1})
 	perftrace.Mark("store.sqlite_open")
 	if err != nil {
 		return nil, err
 	}
-	db := &DB{DB: raw}
+	db := &DB{DB: raw, lanes: newLanes(path, raw)}
 	if err := db.init(ctx, path); err != nil {
+		raw.Close()
+		return nil, err
+	}
+	// After init: the schema no longer changes and the WAL exists, which
+	// a read-only connection needs to open.
+	if err := db.afterInit(ctx); err != nil {
 		raw.Close()
 		return nil, err
 	}
 	return db, nil
 }
 
-// Query is sqlite.DB's, timed for perftrace's SQL trace when it is on.
+// afterInit sets the writer's WAL size limit, turns the readers on and
+// starts the checkpoint coordinator, for a database in WAL mode.
+func (db *DB) afterInit(ctx context.Context) error {
+	rows, err := db.Query(ctx, "PRAGMA journal_mode")
+	if err != nil {
+		return err
+	}
+	if len(rows.Values) != 1 || !strings.EqualFold(Str(rows.Values[0][0]), "wal") {
+		return nil
+	}
+	if _, err := db.Query(ctx, fmt.Sprintf("PRAGMA journal_size_limit = %d", walSizeLimit)); err != nil {
+		return err
+	}
+	rows, err = db.Query(ctx, "PRAGMA page_size")
+	if err != nil {
+		return err
+	}
+	db.lanes.ready.Store(true)
+	db.lanes.startCheckpointer(Int(rows.Values[0][0]))
+	return nil
+}
+
+// Close stops the checkpoint coordinator, closes the readers, empties the
+// WAL with a TRUNCATE checkpoint on the writer, and closes the writer.
+// Repeated calls return the first one's error.
+func (db *DB) Close() error {
+	db.closed.Do(func() {
+		l := db.lanes
+		l.stopCheckpointer()
+		err := l.closeReaders()
+		if l.ready.Load() {
+			// Best effort: a closing app must not fail on a busy WAL.
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			if w, aerr := l.wq.acquire(ctx, laneHold, anyConn); aerr == nil {
+				l.checkpoint(ctx, "TRUNCATE", true)
+				l.wq.release(w)
+			}
+			cancel()
+		}
+		db.errC = errors.Join(err, db.DB.Close())
+	})
+	return db.errC
+}
+
+// Query runs one statement and copies its rows. A plain SELECT (no PRAGMA,
+// WITH or RETURNING, no last_insert_rowid(), changes() or total_changes())
+// runs on a reader of ctx's lane (WithLane): Interactive on I0, I1 or an
+// idle B, the others on B. Anything else runs on the writer. Each call is
+// timed for perftrace's SQL trace when it is on.
 func (db *DB) Query(ctx context.Context, sql string, args ...any) (sqlite.Rows, error) {
-	if !perftrace.SQLOn() {
-		return db.DB.Query(ctx, sql, args...)
+	l := db.lanes
+	ro := readOnlySQL(sql)
+	if ro {
+		lane, method := LaneOf(ctx)
+		if rows, err, ok := l.read(ctx, lane, method, sql, args); ok {
+			return rows, err
+		}
+	} else if l.ready.Load() && setsJournalMode(sql) {
+		if err := l.closeReaders(); err != nil {
+			slog.Default().Warn("could not close the read-only database connections", "err", err)
+		}
 	}
-	t := time.Now()
-	r, err := db.DB.Query(ctx, sql, args...)
-	perftrace.SQL(ctx, "q", sql, t)
-	return r, err
+	var rows sqlite.Rows
+	err := l.onW(ctx, "q", sql, !ro, func() error {
+		var e error
+		rows, e = db.DB.Query(ctx, sql, args...)
+		return e
+	})
+	return rows, err
 }
 
-// Execute is sqlite.DB's, timed as Query is.
+// Execute runs one statement on the writer, after its admission (lanes.go).
 func (db *DB) Execute(ctx context.Context, sql string, args ...any) (sqlite.Result, error) {
-	if !perftrace.SQLOn() {
-		return db.DB.Execute(ctx, sql, args...)
-	}
-	t := time.Now()
-	r, err := db.DB.Execute(ctx, sql, args...)
-	perftrace.SQL(ctx, "x", sql, t)
+	var r sqlite.Result
+	err := db.lanes.onW(ctx, "x", sql, true, func() error {
+		var e error
+		r, e = db.DB.Execute(ctx, sql, args...)
+		return e
+	})
 	return r, err
 }
 
-// Transaction is sqlite.DB's, timed as Query is (by its first statement).
+// Transaction runs stmts under BEGIN IMMEDIATE on the writer, after its
+// admission (lanes.go); traced by its first statement.
 func (db *DB) Transaction(ctx context.Context, stmts []sqlite.Statement) ([]sqlite.Result, error) {
-	if !perftrace.SQLOn() {
-		return db.DB.Transaction(ctx, stmts)
-	}
-	t := time.Now()
-	r, err := db.DB.Transaction(ctx, stmts)
 	first := ""
 	if len(stmts) > 0 {
 		first = stmts[0].SQL
 	}
-	perftrace.SQL(ctx, fmt.Sprintf("t%d", len(stmts)), first, t)
+	var r []sqlite.Result
+	err := db.lanes.onW(ctx, fmt.Sprintf("t%d", len(stmts)), first, true, func() error {
+		var e error
+		r, e = db.DB.Transaction(ctx, stmts)
+		return e
+	})
 	return r, err
 }
 
