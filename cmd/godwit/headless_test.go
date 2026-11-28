@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1413,4 +1414,177 @@ func TestBackendReopenedStaysAccessory(t *testing.T) {
 			t.Fatalf("visible=%v: %v, want %v", visible, calls, want)
 		}
 	}
+}
+
+// countingTraySvc is the tray's core with its reads counted.
+type countingTraySvc struct {
+	*core.Service
+	mu      sync.Mutex
+	folders map[int64]int // ListFolders by account
+	codes   int           // RecentSignInCodes
+}
+
+func (s *countingTraySvc) ListFolders(ctx context.Context, accountID int64) ([]core.Folder, error) {
+	s.mu.Lock()
+	if s.folders == nil {
+		s.folders = map[int64]int{}
+	}
+	s.folders[accountID]++
+	s.mu.Unlock()
+	return s.Service.ListFolders(ctx, accountID)
+}
+
+func (s *countingTraySvc) RecentSignInCodes(ctx context.Context, now time.Time) ([]core.SignInCode, error) {
+	s.mu.Lock()
+	s.codes++
+	s.mu.Unlock()
+	return s.Service.RecentSignInCodes(ctx, now)
+}
+
+func (s *countingTraySvc) counts() (map[int64]int, int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return maps.Clone(s.folders), s.codes
+}
+
+// oldTrayUnread is the tray's unread total as it read it before: every
+// account's inbox folders.
+func oldTrayUnread(t *testing.T, svc *core.Service) int {
+	t.Helper()
+	ctx := context.Background()
+	accs, err := svc.ListAccounts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, acc := range accs {
+		fs, err := svc.ListFolders(ctx, acc.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range fs {
+			if f.Role == "inbox" {
+				n += f.Unread
+			}
+		}
+	}
+	return n
+}
+
+// The tray reads at most once per trayLoadEvery whatever the burst of
+// events, only for mail and its own settings, only the inbox count of the
+// account an event names, and the sign-in codes only after new mail or on
+// their timer; its unread total stays the old sum over every account.
+func TestBackendTrayCoalescesReads(t *testing.T) {
+	env := coretest.New(t, coretest.WithoutAutoSync())
+	a := env.AddAccount(t, "alice@example.com")
+	b := env.AddAccount(t, "bob@example.com")
+	env.Deliver(t, a.ID, "INBOX", coretest.Msg("x@example.com", a.Email, "one", "1"))
+	env.Deliver(t, b.ID, "INBOX", coretest.Msg("y@example.com", b.Email, "two", "2"))
+	st, err := env.Svc.GetSettings(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.UnreadInMenuBar = true
+	if _, err := env.Svc.SetSettings(context.Background(), st); err != nil {
+		t.Fatal(err)
+	}
+
+	var postMu sync.Mutex
+	post := func(fn func()) { postMu.Lock(); defer postMu.Unlock(); fn() }
+	svc := &countingTraySvc{Service: env.Svc}
+	sink := &recordingSink{supported: true}
+	tray := newBackendTray(svc, sink, "en", post, newStepClock(time.Now()), t.Logf, func(string) {}, func() {})
+	load := newStepClock(time.Now())
+	tray.loadClock = load
+	t.Cleanup(tray.Close)
+	post(tray.Start)
+	if n, ok := sink.LastUnread(); !ok || n != 2 || n != oldTrayUnread(t, env.Svc) {
+		t.Fatalf("initial unread = (%d, %v), want 2", n, ok)
+	}
+	folders, codes := svc.counts()
+	if folders[a.ID] != 1 || folders[b.ID] != 1 || codes != 1 {
+		t.Fatalf("initial reads: folders %v, codes %d", folders, codes)
+	}
+
+	// Events that change nothing the tray shows read nothing.
+	for _, typ := range []string{events.LabelsChanged, events.SyncStarted, events.DraftsChanged, events.AddressBooksChanged, events.OutboxChanged} {
+		tray.HandleEvent(events.Event{Type: typ, AccountID: a.ID})
+	}
+	load.Advance(trayLoadEvery)
+	time.Sleep(50 * time.Millisecond)
+	if f, c := svc.counts(); !maps.Equal(f, folders) || c != codes {
+		t.Fatalf("events outside mail read: folders %v, codes %d", f, c)
+	}
+
+	// A burst of one account's mail events within the interval: one read, of
+	// that account only, after the interval.
+	if err := env.Svc.SetFlags(context.Background(), firstMessage(t, env.Svc, a.ID), []string{`\Seen`}, nil); err != nil {
+		t.Fatal(err)
+	}
+	for range 50 {
+		tray.HandleEvent(events.Event{Type: events.MessagesChanged, AccountID: a.ID})
+	}
+	waitCond(t, "unread=1 after the burst", func() bool {
+		load.Advance(trayLoadEvery)
+		n, ok := sink.LastUnread()
+		return ok && n == 1
+	})
+	// At most a read at once and one at the interval's end.
+	f, c := svc.counts()
+	if f[a.ID] < 2 || f[a.ID] > 3 || f[b.ID] != 1 || c != codes {
+		t.Fatalf("a burst on account %d read folders %v, codes %d", a.ID, f, c)
+	}
+	before := f
+	if n, _ := sink.LastUnread(); n != oldTrayUnread(t, env.Svc) {
+		t.Fatalf("unread %d, old sum %d", n, oldTrayUnread(t, env.Svc))
+	}
+
+	// New mail reads the codes; an event naming no account reads every account.
+	env.Deliver(t, b.ID, "INBOX", coretest.Msg("z@example.com", b.Email, "three", "3"))
+	tray.HandleEvent(events.Event{Type: events.MessageReceived, AccountID: b.ID})
+	tray.HandleEvent(events.Event{Type: events.MessagesChanged})
+	waitCond(t, "unread=2 after new mail", func() bool {
+		load.Advance(trayLoadEvery)
+		n, ok := sink.LastUnread()
+		return ok && n == 2
+	})
+	f, c = svc.counts()
+	if f[a.ID] == before[a.ID] || f[b.ID] == before[b.ID] || f[b.ID] > before[b.ID]+2 || c == codes || c > codes+2 {
+		t.Fatalf("new mail and an unnamed change read folders %v, codes %d", f, c)
+	}
+	if n, _ := sink.LastUnread(); n != oldTrayUnread(t, env.Svc) {
+		t.Fatalf("unread %d, old sum %d", n, oldTrayUnread(t, env.Svc))
+	}
+
+	// Its own settings: the badge follows UnreadInMenuBar.
+	st.UnreadInMenuBar = false
+	if _, err := env.Svc.SetSettings(context.Background(), st); err != nil {
+		t.Fatal(err)
+	}
+	tray.HandleEvent(events.Event{Type: events.SettingsChanged})
+	waitCond(t, "badge off", func() bool {
+		load.Advance(trayLoadEvery)
+		n, ok := sink.LastUnread()
+		return ok && n == 0
+	})
+}
+
+func firstMessage(t *testing.T, svc *core.Service, accountID int64) []int64 {
+	t.Helper()
+	fs, err := svc.ListFolders(context.Background(), accountID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range fs {
+		if f.Role == "inbox" {
+			p, err := svc.ListMessages(context.Background(), core.View{FolderID: f.ID}, "", 10)
+			if err != nil || len(p.Items) == 0 {
+				t.Fatalf("inbox of %d: %+v, %v", accountID, p, err)
+			}
+			return []int64{p.Items[0].ID}
+		}
+	}
+	t.Fatalf("account %d has no inbox", accountID)
+	return nil
 }

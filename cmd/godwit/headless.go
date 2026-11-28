@@ -528,14 +528,85 @@ type systemClock struct{}
 func (systemClock) Now() time.Time                                  { return time.Now() }
 func (systemClock) AfterFunc(d time.Duration, f func()) func() bool { return time.AfterFunc(d, f).Stop }
 
+// traySnapshot is what one of the tray's reads found. Each part is read only
+// when the tray owes it (trayDirty): settings, the inbox unread count of some
+// accounts, the recent sign-in codes.
 type traySnapshot struct {
-	st          core.Settings
-	inboxUnread int
-	codes       []core.SignInCode
+	st      core.Settings
+	stRead  bool
+	inbox   map[int64]int // inbox unread by account, for the accounts read
+	all     bool          // inbox holds every account: the others are gone
+	read    bool          // the accounts were listed: inbox and all are set
+	codes   []core.SignInCode
+	codesOK bool // codes were read
+}
+
+// trayDirty is what the tray must read again, from the events since its
+// last read: only mail and its own settings change what it shows.
+type trayDirty struct {
+	settings bool
+	codes    bool           // new mail, or a shown code ages out
+	all      bool           // every account's inbox count
+	accounts map[int64]bool // these accounts' inbox counts
+}
+
+func (d *trayDirty) add(o trayDirty) {
+	d.settings = d.settings || o.settings
+	d.codes = d.codes || o.codes
+	d.all = d.all || o.all
+	for id := range o.accounts {
+		if d.accounts == nil {
+			d.accounts = map[int64]bool{}
+		}
+		d.accounts[id] = true
+	}
+}
+
+func (d trayDirty) empty() bool { return !d.settings && !d.codes && !d.all && len(d.accounts) == 0 }
+
+// trayEventDirty is what event ev makes the tray read again; zero for an
+// event that changes nothing it shows.
+func trayEventDirty(ev events.Event) trayDirty {
+	mail := func(codes bool) trayDirty {
+		if ev.AccountID == 0 {
+			return trayDirty{all: true, codes: codes}
+		}
+		return trayDirty{accounts: map[int64]bool{ev.AccountID: true}, codes: codes}
+	}
+	switch ev.Type {
+	case events.MessageReceived:
+		return mail(true)
+	case events.MessagesChanged, events.SyncFinished: // a sync's end: a new account's folders and roles
+		return mail(false)
+	case events.SettingsChanged: // also folder roles and accounts: read everything again
+		return trayDirty{settings: true, all: true}
+	case events.PluginsChanged: // the sign-in codes plugin switched
+		return trayDirty{codes: true}
+	}
+	return trayDirty{}
+}
+
+// trayLoadEvery is the shortest time between the starts of two of the
+// tray's reads: a sync's burst of events makes one read per interval, not
+// one per event.
+const trayLoadEvery = 2 * time.Second
+
+// trayService is what the tray asks of core.
+type trayService interface {
+	GetSettings(ctx context.Context) (core.Settings, error)
+	SetSettings(ctx context.Context, st core.Settings) (core.Settings, error)
+	ListAccounts(ctx context.Context) ([]core.Account, error)
+	ListFolders(ctx context.Context, accountID int64) ([]core.Folder, error)
+	RecentSignInCodes(ctx context.Context, now time.Time) ([]core.SignInCode, error)
+	GetMessage(ctx context.Context, id int64, loadRemoteImages bool) (core.Message, error)
+	SyncNow(ctx context.Context, accountID int64) error
+	Publish(ev events.Event)
+	UIConnected() bool
+	UIForeground() bool
 }
 
 type backendTray struct {
-	svc     *core.Service
+	svc     trayService
 	plat    headlessPlatform
 	sysLang string
 	post    func(func())
@@ -543,6 +614,10 @@ type backendTray struct {
 	logf    func(string, ...any)
 	show    func(what string) // showUI
 	onQuit  func()
+
+	// loadClock spaces the reads (trayLoadEvery). It is the real clock even
+	// when clock is a test's: the codes' expiry tests step clock alone.
+	loadClock app.Clock
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -555,7 +630,11 @@ type backendTray struct {
 
 	loadPosted atomic.Bool // a requestLoad is posted and has not run yet
 
+	dirtyMu sync.Mutex
+	dirty   trayDirty // owed by the next read; events add to it off the main thread
+
 	settings     core.Settings
+	inbox        map[int64]int // inbox unread by account, as last read
 	trayUnread   int
 	codesStarted time.Time
 	codes        []core.SignInCode
@@ -563,9 +642,11 @@ type backendTray struct {
 	loading      bool
 	again        bool
 	closed       bool
+	lastLoad     time.Time   // the last read's start, by loadClock
+	loadWait     func() bool // stops the timer of a read held back by trayLoadEvery
 }
 
-func newBackendTray(svc *core.Service, plat headlessPlatform, sysLang string, post func(func()), clock app.Clock, logf func(string, ...any), show func(string), onQuit func()) *backendTray {
+func newBackendTray(svc trayService, plat headlessPlatform, sysLang string, post func(func()), clock app.Clock, logf func(string, ...any), show func(string), onQuit func()) *backendTray {
 	if clock == nil {
 		clock = systemClock{}
 	}
@@ -576,6 +657,7 @@ func newBackendTray(svc *core.Service, plat headlessPlatform, sysLang string, po
 		sysLang:    sysLang,
 		post:       post,
 		clock:      clock,
+		loadClock:  systemClock{},
 		logf:       logf,
 		show:       show,
 		onQuit:     onQuit,
@@ -595,17 +677,21 @@ func (t *backendTray) Start() {
 		quit:     t.quit,
 		quitStop: t.onQuit,
 	})
-	snap, err := t.readSnapshot(t.ctx, t.clock.Now())
+	t.lastLoad = t.loadClock.Now()
+	snap, err := t.readSnapshot(t.ctx, t.clock.Now(), trayDirty{settings: true, all: true, codes: true})
 	if err != nil {
 		t.logf("tray: reading initial state: %v", err)
 		snap.st.ShowTrayIcon = true
 	}
 	t.settings = snap.st
+	t.dirtyMu.Lock()
+	t.inbox = snap.inbox
+	t.dirtyMu.Unlock()
 	t.plat.SetThemeSource(snap.st.Theme)
 	t.plat.SetLanguage(snap.st.UILanguage, t.sysLang)
 	t.plat.SetTrayVisible(snap.st.ShowTrayIcon)
 	t.plat.SetTrayQuitStop(snap.st.BackgroundReceive == core.BackgroundReceiveAlways)
-	t.updateUnread(snap.inboxUnread)
+	t.updateUnread(t.inboxUnread())
 	if err == nil {
 		t.applyCodes(snap.codes)
 	}
@@ -684,6 +770,7 @@ func (t *backendTray) hideTrayIcon() {
 			}
 			return
 		}
+		t.owe(trayDirty{settings: true})
 		t.post(t.requestLoad)
 	}()
 }
@@ -695,12 +782,12 @@ func (t *backendTray) HandleEvent(ev events.Event) {
 			go t.previewCode(ev.MessageIDs[0], ev.Kind == "link")
 		}
 		return
-	case events.RunsChanged, events.ApprovalsChanged, events.MCPSendsChanged,
-		events.ImportProgress, events.SkillsChanged, events.SyncStarted,
-		events.SyncFailed, events.MCPChanged, events.ModelsChanged,
-		events.OutboxChanged, events.SignaturesChanged:
+	}
+	d := trayEventDirty(ev)
+	if d.empty() {
 		return
 	}
+	t.owe(d)
 	// Coalesced, and off the pump: post waits for the main thread, and the
 	// pump's subscription drops what waits too long.
 	if t.loadPosted.CompareAndSwap(false, true) {
@@ -729,11 +816,31 @@ func (t *backendTray) previewCode(messageID int64, link bool) {
 	t.post(func() { t.plat.ShowSignInCode(&code) })
 }
 
+// owe adds d to what the next read reads. Any goroutine.
+func (t *backendTray) owe(d trayDirty) {
+	t.dirtyMu.Lock()
+	t.dirty.add(d)
+	t.dirtyMu.Unlock()
+}
+
+// owed takes what the next read reads.
+func (t *backendTray) owed() trayDirty {
+	t.dirtyMu.Lock()
+	defer t.dirtyMu.Unlock()
+	d := t.dirty
+	t.dirty = trayDirty{}
+	return d
+}
+
 func (t *backendTray) Close() {
 	t.cancel()
 	t.stopCodesTimer()
 	t.post(func() {
 		t.closed = true
+		if t.loadWait != nil {
+			t.loadWait()
+			t.loadWait = nil
+		}
 		t.plat.ShowSignInCode(nil)
 	})
 }
@@ -764,12 +871,16 @@ func (t *backendTray) scheduleCodesTimer() {
 	t.timerMu.Lock()
 	if t.ctx.Err() == nil {
 		t.codesStop = t.clock.AfterFunc(wait, func() {
+			t.owe(trayDirty{codes: true})
 			t.post(t.requestLoad)
 		})
 	}
 	t.timerMu.Unlock()
 }
 
+// requestLoad reads what the tray owes, at most once per trayLoadEvery: a
+// request sooner waits for the interval's end, and the requests meanwhile
+// make that one read. Main thread.
 func (t *backendTray) requestLoad() {
 	if t.closed || t.ctx.Err() != nil {
 		return
@@ -778,67 +889,154 @@ func (t *backendTray) requestLoad() {
 		t.again = true
 		return
 	}
+	if t.loadWait != nil {
+		return // a read is already due at the interval's end
+	}
+	if wait := t.lastLoad.Add(trayLoadEvery).Sub(t.loadClock.Now()); wait > 0 {
+		t.loadWait = t.loadClock.AfterFunc(wait, func() {
+			t.post(func() {
+				t.loadWait = nil
+				t.requestLoad()
+			})
+		})
+		return
+	}
+	d := t.owed()
+	if d.empty() {
+		return
+	}
 	t.stopCodesTimer()
 	t.loading = true
+	t.lastLoad = t.loadClock.Now()
 	ctx := t.ctx
 	now := t.clock.Now()
 	go func() {
-		snap, err := t.readSnapshot(ctx, now)
-		t.post(func() { t.applySnapshot(snap, err) })
+		snap, err := t.readSnapshot(ctx, now, d)
+		t.post(func() { t.applySnapshot(snap, d, err) })
 	}()
 }
 
-func (t *backendTray) readSnapshot(ctx context.Context, now time.Time) (traySnapshot, error) {
-	st, err := t.svc.GetSettings(ctx)
-	if err != nil {
-		return traySnapshot{}, err
+// readSnapshot reads what d owes: the settings, the inbox unread count of the
+// accounts named (of all, and of any account not read before), the codes.
+func (t *backendTray) readSnapshot(ctx context.Context, now time.Time, d trayDirty) (traySnapshot, error) {
+	var snap traySnapshot
+	var err error
+	if d.settings {
+		if snap.st, err = t.svc.GetSettings(ctx); err != nil {
+			return traySnapshot{}, err
+		}
+		snap.stRead = true
 	}
-	accs, err := t.svc.ListAccounts(ctx)
-	if err != nil {
-		return traySnapshot{}, err
-	}
-	inbox := 0
-	for _, acc := range accs {
-		fs, err := t.svc.ListFolders(ctx, acc.ID)
+	if d.all || len(d.accounts) > 0 {
+		accs, err := t.svc.ListAccounts(ctx)
 		if err != nil {
 			return traySnapshot{}, err
 		}
-		for _, f := range fs {
-			if f.Role == "inbox" {
-				inbox += f.Unread
+		snap.read, snap.all, snap.inbox = true, d.all, map[int64]int{}
+		known := t.knownAccounts()
+		for _, acc := range accs {
+			if !d.all && !d.accounts[acc.ID] && known[acc.ID] {
+				continue
+			}
+			fs, err := t.svc.ListFolders(ctx, acc.ID)
+			if err != nil {
+				return traySnapshot{}, err
+			}
+			n := 0
+			for _, f := range fs {
+				if f.Role == "inbox" {
+					n += f.Unread
+				}
+			}
+			snap.inbox[acc.ID] = n
+		}
+		if !snap.all { // an account gone: keep only those listed
+			listed := map[int64]bool{}
+			for _, acc := range accs {
+				listed[acc.ID] = true
+			}
+			for id := range known {
+				if !listed[id] {
+					snap.inbox[id] = -1
+				}
 			}
 		}
 	}
-	codes, err := t.svc.RecentSignInCodes(ctx, now)
-	if err != nil {
-		return traySnapshot{}, err
+	if d.codes {
+		if snap.codes, err = t.svc.RecentSignInCodes(ctx, now); err != nil {
+			return traySnapshot{}, err
+		}
+		snap.codesOK = true
 	}
-	return traySnapshot{st: st, inboxUnread: inbox, codes: codes}, nil
+	return snap, nil
 }
 
-func (t *backendTray) applySnapshot(snap traySnapshot, err error) {
+// knownAccounts are the accounts whose inbox count the tray holds. The map
+// is read off the main thread while only the main thread writes it: a copy.
+func (t *backendTray) knownAccounts() map[int64]bool {
+	t.dirtyMu.Lock()
+	defer t.dirtyMu.Unlock()
+	out := make(map[int64]bool, len(t.inbox))
+	for id := range t.inbox {
+		out[id] = true
+	}
+	return out
+}
+
+// inboxUnread is the inbox unread count of every account.
+func (t *backendTray) inboxUnread() int {
+	n := 0
+	for _, u := range t.inbox {
+		n += u
+	}
+	return n
+}
+
+func (t *backendTray) applySnapshot(snap traySnapshot, d trayDirty, err error) {
 	t.loading = false
 	if t.closed || t.ctx.Err() != nil {
 		return
 	}
 	if err != nil {
 		t.logf("tray: refreshing state: %v", err)
+		t.owe(d) // read again with the next request
 	} else {
-		if snap.st.Theme != t.settings.Theme {
-			t.plat.SetThemeSource(snap.st.Theme)
+		if snap.stRead {
+			if snap.st.Theme != t.settings.Theme {
+				t.plat.SetThemeSource(snap.st.Theme)
+			}
+			if snap.st.UILanguage != t.settings.UILanguage {
+				t.plat.SetLanguage(snap.st.UILanguage, t.sysLang)
+			}
+			if snap.st.ShowTrayIcon != t.settings.ShowTrayIcon {
+				t.plat.SetTrayVisible(snap.st.ShowTrayIcon)
+			}
+			if snap.st.BackgroundReceive != t.settings.BackgroundReceive {
+				t.plat.SetTrayQuitStop(snap.st.BackgroundReceive == core.BackgroundReceiveAlways)
+			}
+			t.settings = snap.st
 		}
-		if snap.st.UILanguage != t.settings.UILanguage {
-			t.plat.SetLanguage(snap.st.UILanguage, t.sysLang)
+		if snap.read {
+			t.dirtyMu.Lock()
+			if snap.all || t.inbox == nil {
+				t.inbox = map[int64]int{}
+			}
+			for id, n := range snap.inbox {
+				if n < 0 {
+					delete(t.inbox, id)
+				} else {
+					t.inbox[id] = n
+				}
+			}
+			t.dirtyMu.Unlock()
 		}
-		if snap.st.ShowTrayIcon != t.settings.ShowTrayIcon {
-			t.plat.SetTrayVisible(snap.st.ShowTrayIcon)
+		t.updateUnread(t.inboxUnread())
+		switch {
+		case snap.codesOK:
+			t.applyCodes(snap.codes)
+		case snap.stRead: // the banner follows the notification settings
+			t.applyCodes(t.codes)
 		}
-		if snap.st.BackgroundReceive != t.settings.BackgroundReceive {
-			t.plat.SetTrayQuitStop(snap.st.BackgroundReceive == core.BackgroundReceiveAlways)
-		}
-		t.settings = snap.st
-		t.updateUnread(snap.inboxUnread)
-		t.applyCodes(snap.codes)
 	}
 	if t.again {
 		t.again = false
