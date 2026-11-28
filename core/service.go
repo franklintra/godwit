@@ -894,7 +894,10 @@ func (s *Service) dialAccount(ctx context.Context, accountID int64) (recv backen
 		return nil, nil, err
 	}
 	if err := s.ifCurrent(accountID, ver, func() error {
-		_, err := s.db.Execute(ctx, "UPDATE accounts SET features = ? WHERE id = ?", encodeFeatures(d), accountID)
+		// Each sign-in describes the same server: rewrite the row only when
+		// that changed, not once per worker round.
+		f := encodeFeatures(d)
+		_, err := s.db.Execute(ctx, "UPDATE accounts SET features = ? WHERE id = ? AND features IS NOT ?", f, accountID, f)
 		return err
 	}); err != nil {
 		recv.Close()
