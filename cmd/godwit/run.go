@@ -32,6 +32,9 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	if len(args) > 0 && args[0] == "dev-sync-db" {
 		return devSyncDB(ctx, args[1:], stdout, stderr)
 	}
+	if len(args) > 0 && args[0] == "fork-undo" { // not in usage: FORK.md, "Fork rewrites"
+		return forkUndo(ctx, args[1:], stdout, stderr)
+	}
 	if len(args) > 0 && args[0] == "call" {
 		return call(ctx, args[1:], stdout, stderr)
 	}
