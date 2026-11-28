@@ -25,6 +25,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/godwit-email/godwit/core"
 	"github.com/godwit-email/godwit/core/ai"
+	"github.com/godwit-email/godwit/core/events"
 	gomail "github.com/godwit-email/godwit/core/mail"
 	"github.com/godwit-email/godwit/internal/i18n"
 	"github.com/godwit-email/godwit/internal/icons"
@@ -61,16 +62,25 @@ type readerPane struct {
 	barBottom float32                  // the floating reply bar's height as the last frame laid it out: the messages end above it
 	pane      ui.Rect                  // the messages' scroll box as the last frame laid it out, in the window: the bars float at its top and bottom
 
-	getThread  func(ctx context.Context, id int64) (core.Thread, error)                       // tests wrap it
-	getMessage func(ctx context.Context, id int64, remote bool) (core.Message, error)         // tests wrap it
-	getAvatar  func(context.Context, int64, bool) (core.Avatar, error)                        // tests wrap it
-	runSkill   func(ctx context.Context, name string, t core.Target) (<-chan ai.Event, error) // tests wrap it
-	cardsFn    func(ctx context.Context, messageID int64) ([]core.Card, error)                // tests wrap it
+	getThread  func(ctx context.Context, id int64) (core.Thread, error)                        // tests wrap it
+	openThread func(ctx context.Context, threadID, messageID int64) (core.OpenedThread, error) // tests wrap it
+	getMessage func(ctx context.Context, id int64, remote bool) (core.Message, error)          // tests wrap it
+	getAvatar  func(context.Context, int64, bool) (core.Avatar, error)                         // tests wrap it
+	runSkill   func(ctx context.Context, name string, t core.Target) (<-chan ai.Event, error)  // tests wrap it
+	cardsFn    func(ctx context.Context, messageID int64) ([]core.Card, error)                 // tests wrap it
 	tagsFn     func(ctx context.Context, messageID int64) ([]core.Tag, error)
 	quickFn    func(ctx context.Context, messageID int64) ([]core.QuickReply, error) // tests wrap it
 	gistFn     func(ctx context.Context, messageID int64) (string, error)            // tests wrap it
 	skillsFn   func(ctx context.Context) ([]core.SkillInfo, error)                   // tests wrap it
 	actionsFn  func(ctx context.Context, kind string) ([]core.ActionInfo, error)     // tests wrap it
+
+	// seed is the body an open read with its thread (OpenThread), for
+	// loadBody to take instead of reading it again; set only while the
+	// open's result is applied.
+	seed *core.OpenedThread
+	// pre are the next and previous rows' opens, read while the reader is
+	// idle (prefetch), by route key.
+	pre map[[2]int64]*prefetched
 }
 
 // session is the thread, or message, the pane shows: from the route naming
@@ -189,6 +199,16 @@ type msgBody struct {
 
 	timing bodyTiming // how long the body took to show (GODWIT_READER_TIMING)
 
+	// shown: the page painted (or failed, or the wait for it ended) since
+	// the body was read; onPaint are the calls that wait for that
+	// (whenPainted), so they never queue before the body's read.
+	shown     bool
+	onPaint   []func()
+	paintWait func() // stops sideCallsWait's timer
+	// allowed is ImagesAllowed as read with the body; allowedFresh while
+	// no avatar read has used it yet: the avatar then asks no second time.
+	allowed, allowedFresh bool
+
 	openpgp openpgpState // what the user's gpg said of it (reader_openpgp.go)
 
 	unsub     core.Unsubscribe // how it unsubscribes, by its headers; none until asked
@@ -200,7 +220,7 @@ type msgBody struct {
 
 func newReader(p *mailPage) *reader {
 	r := &reader{readerPane: &readerPane{p: p, ai: map[int64]*msgAI{},
-		getThread: p.a.svc.GetThread, getMessage: p.a.svc.GetMessageLazyImages, getAvatar: p.a.svc.SenderAvatar, runSkill: p.a.svc.RunSkill,
+		getThread: p.a.svc.GetThread, openThread: p.a.svc.OpenThread, getMessage: p.a.svc.GetMessageLazyImages, getAvatar: p.a.svc.SenderAvatar, runSkill: p.a.svc.RunSkill,
 		cardsFn: p.a.svc.PluginCards, tagsFn: p.a.svc.PluginTags, quickFn: p.a.svc.QuickReplies, gistFn: p.a.svc.MessageGist, skillsFn: p.a.svc.ListSkills, actionsFn: p.a.svc.ListActions}}
 	r.session = r.newSession([2]int64{})
 	return r
@@ -258,7 +278,9 @@ func (r *reader) sync(reread bool) {
 	if k[0] != 0 {
 		r.load(k)
 	}
-	r.loadWhy()
+	if r.loaded || k[0] == 0 { // a thread opening reads why once its body shows (load)
+		r.loadWhy()
+	}
 }
 
 // reset closes the session shown and starts thread k's, at its top.
@@ -299,17 +321,23 @@ func (r *reader) waiting() bool {
 }
 
 // load reads thread k: the one shown again, or the one to switch to
-// (r.next), which replaces what shows once read.
+// (r.next), which replaces what shows once read. A thread opening (a switch,
+// or a session not yet loaded) is read in one call, its newest or routed
+// message's body with it (OpenThread), or taken from the prefetched opens;
+// what shows beside the body is read once the body has painted. A thread
+// read again (an event) reads only the thread and its labels.
 func (r *reader) load(k [2]int64) {
 	a, s, get := r.p.a, r.session, r.getThread
 	route := k
+	opening := r.next == k || !r.loaded
 	// Only two routes into the same thread can transfer a live page.
 	checkTransfer := r.next == k && (r.key[0] == k[0] || r.prev != nil && r.prev.key[0] == k[0])
 	var transferID int64
 	var transferTrusted bool
 	var th core.Thread
 	var labels map[int64][]core.AppliedLabel
-	r.read.Run(a, func(ctx context.Context) (err error) {
+	var opened *core.OpenedThread
+	read := func(ctx context.Context) (err error) {
 		if th, err = get(ctx, k[0]); err != nil {
 			return err
 		}
@@ -328,20 +356,52 @@ func (r *reader) load(k [2]int64) {
 		}
 		labels, err = a.svc.ThreadLabels(ctx, []int64{k[0]})
 		return err
-	}, func(err error) {
+	}
+	if opening {
+		pre := r.takePrefetched(k)
+		open, apart := r.openThread, read
+		read = func(ctx context.Context) error {
+			var ot core.OpenedThread
+			if pre != nil {
+				ot = *pre
+			} else {
+				var err error
+				if ot, err = open(ctx, k[0], k[1]); err != nil {
+					if ctx.Err() != nil {
+						return err
+					}
+					// Read apart: a thread that reads while its body does
+					// not shows, with the body's own error and Retry.
+					return apart(ctx)
+				}
+			}
+			opened, th, labels = &ot, ot.Thread, map[int64][]core.AppliedLabel{k[0]: ot.Labels}
+			if k[1] != 0 && ot.MessageID != 0 {
+				k[1] = ot.MessageID // the routed message, or the one it merged into (ADR 0034)
+			}
+			if checkTransfer && ot.MessageID != 0 && ot.MessageID == cmp.Or(k[1], th.Messages[len(th.Messages)-1].ID) {
+				transferID, transferTrusted = ot.MessageID, ot.ImagesAllowed
+			}
+			return nil
+		}
+	}
+	r.read.Run(a, read, func(err error) {
 		if !r.has(s) {
 			return
 		}
-		if switching := r.next == route; switching { // what showed stays drawn till this one's body is sized
+		switching := r.next == route
+		if switching { // what showed stays drawn till this one's body is sized
 			r.next = [2]int64{}
 			r.retire(route)
-			defer r.loadWhy()
 		}
 		if err != nil {
 			if r.loaded {
 				a.toastErr(err) // a refresh failed; keep the readable thread
 			} else {
 				r.loadErr = err
+			}
+			if opening {
+				r.loadWhy()
 			}
 			return
 		}
@@ -371,6 +431,8 @@ func (r *reader) load(k [2]int64) {
 			}
 		}
 		var unread []core.MessageSummary
+		var opens *msgBody // the body this open shows: what is read beside it waits for its paint
+		r.seed = opened
 		for i, m := range msgs {
 			if prev, ok := known[m.ID]; ok {
 				if b := r.bodies[m.ID]; b != nil {
@@ -405,16 +467,43 @@ func (r *reader) load(k [2]int64) {
 					}
 				}
 				r.expand(m.ID)
+				if opening {
+					opens = r.bodies[m.ID]
+				}
 			}
 		}
-		r.markRead(unread)
-		r.startAI()
+		r.seed = nil
+		s := r.session
+		after := func(f func()) {
+			run := func() {
+				if r.has(s) {
+					f()
+				}
+			}
+			r.whenPainted(opens, run)
+		}
+		r.markReadHere(unread)
+		after(func() {
+			r.sendRead(unread)
+			r.startAI()
+			if opening {
+				r.loadWhy()
+				r.prefetch()
+			}
+		})
 	})
 }
 
 // markRead flags msgs \Seen: one call per account, chained after the
 // account's earlier writes.
 func (r *reader) markRead(msgs []core.MessageSummary) {
+	r.sendRead(msgs)
+	r.markReadHere(msgs)
+}
+
+// sendRead writes msgs \Seen: one call per account, chained after the
+// account's earlier writes.
+func (r *reader) sendRead(msgs []core.MessageSummary) {
 	a := r.p.a
 	byAcc := map[int64][]int64{}
 	for _, m := range msgs {
@@ -427,6 +516,11 @@ func (r *reader) markRead(msgs []core.MessageSummary) {
 			return a.svc.SetFlags(ctx, ids, []string{`\Seen`}, nil)
 		}, a.toastErr)
 	}
+}
+
+// markReadHere shows msgs read in the reader at once, before sendRead
+// writes it.
+func (r *reader) markReadHere(msgs []core.MessageSummary) {
 	for i, m := range r.msgs {
 		if !isSeen(m) && slices.ContainsFunc(msgs, func(u core.MessageSummary) bool { return u.ID == m.ID }) {
 			r.msgs[i].Flags = append(slices.Clone(m.Flags), `\Seen`)
@@ -438,10 +532,16 @@ func (r *reader) markRead(msgs []core.MessageSummary) {
 // (then its page is made again), and starts its AI.
 func (r *reader) expand(id int64) {
 	r.open[id] = true
-	r.startFor(id)
 	if b := r.bodies[id]; b == nil || !b.ready || b.err != nil {
 		r.loadBody(id)
+		s := r.session
+		r.whenPainted(r.bodies[id], func() { // its cards and summary wait for its body
+			if r.has(s) {
+				r.startFor(id)
+			}
+		})
 	} else {
+		r.startFor(id)
 		if b.avatarPending() {
 			r.loadAvatar(id, b.avatarAllow)
 		}
@@ -470,7 +570,10 @@ func (r *reader) toggle(id int64) {
 }
 
 // loadBody reads the message off the UI thread (remote images blocked:
-// its page asks for them itself), then makes its page.
+// its page asks for them itself), then makes its page. The body an open read
+// with its thread (seed) is taken as read. What shows beside the body (the
+// avatar, how it unsubscribes, OpenPGP, the attachments' cache) is read once
+// its page has painted.
 func (r *reader) loadBody(id int64) {
 	a, s, get := r.p.a, r.session, r.getMessage
 	b := r.bodies[id]
@@ -478,10 +581,17 @@ func (r *reader) loadBody(id int64) {
 		b = &msgBody{}
 		r.bodies[id] = b
 	}
+	if sd := r.seed; sd != nil && sd.MessageID == id && sd.Message.ID == id {
+		b.read.Stop()
+		b.err, b.shown = nil, false
+		b.timing.begin()
+		r.bodyRead(b, id, sd.Message, sd.ImagesAllowed)
+		return
+	}
 	if b.read.loading {
 		return
 	}
-	b.err = nil
+	b.err, b.shown = nil, false
 	b.timing.begin()
 	var m core.Message
 	var trusted bool
@@ -498,17 +608,69 @@ func (r *reader) loadBody(id int64) {
 		if err != nil {
 			b.stopAwaitingPaint()
 			b.err = err
+			b.flushPainted()
 			return
 		}
-		b.msg, b.ready, b.trusted = m, true, trusted
-		b.timing.readDone()
-		b.avatarBlocked = !trusted
-		r.openView(id, &m)
+		r.bodyRead(b, id, m, trusted)
+	})
+}
+
+// bodyRead shows message id, read as m with its images allowed or not:
+// its page now, what shows beside it once the page has painted.
+func (r *reader) bodyRead(b *msgBody, id int64, m core.Message, trusted bool) {
+	a, s := r.p.a, r.session
+	b.msg, b.ready, b.trusted = m, true, trusted
+	b.allowed, b.allowedFresh = trusted, true
+	b.timing.readDone()
+	b.avatarBlocked = !trusted
+	r.openView(id, &m)
+	r.whenPainted(b, func() {
+		if !r.has(s) || r.bodies[id] != b {
+			return
+		}
 		r.loadAvatar(id, b.avatarAllow)
 		r.loadUnsubscribe(id)
 		r.loadOpenPGP(id)
-		a.stageCached(m.Attachments)
+		a.stageCached(b.msg.Attachments)
 	})
+}
+
+// sideCallsWait is how long what shows beside a body waits for the body's
+// page to paint at most: a page in a background window may never paint.
+const sideCallsWait = time.Second
+
+// whenPainted runs f once b's page has painted since b was read, or the
+// read or the page failed, or sideCallsWait has passed: at once when that
+// is so already, or when there is no body to wait for. What the reader
+// reads beside a body so never queues before the body's read on the way to
+// its first paint.
+func (r *reader) whenPainted(b *msgBody, f func()) {
+	if b == nil || b.shown || b.err != nil {
+		f()
+		return
+	}
+	b.onPaint = append(b.onPaint, f)
+	if b.paintWait == nil {
+		b.paintWait = r.p.a.after(sideCallsWait, func() {
+			b.paintWait = nil
+			b.flushPainted()
+		})
+	}
+}
+
+// flushPainted marks b's page painted (or given up on) and runs what waited
+// for it.
+func (b *msgBody) flushPainted() {
+	b.shown = true
+	if b.paintWait != nil {
+		b.paintWait()
+		b.paintWait = nil
+	}
+	fs := b.onPaint
+	b.onPaint = nil
+	for _, f := range fs {
+		f()
+	}
 }
 
 // loadUnsubscribe asks how message id unsubscribes after its body shows:
@@ -554,6 +716,7 @@ func (r *reader) openView(id int64, initial *core.Message) {
 	if err != nil {
 		b.stopAwaitingPaint()
 		b.err = err
+		b.flushPainted()
 		return
 	}
 	b.view, b.close, b.height = v, closeView, -1
@@ -566,6 +729,11 @@ func (r *reader) openView(id int64, initial *core.Message) {
 
 // drop closes b's page and drops its reads: it leaves the session.
 func (b *msgBody) drop() {
+	b.onPaint = nil // the session it was read for is gone
+	if b.paintWait != nil {
+		b.paintWait()
+		b.paintWait = nil
+	}
 	b.read.Stop()
 	b.stopAvatar()
 	b.closeView(true)
@@ -605,6 +773,7 @@ func (b *msgBody) awaitPaint(a *App) {
 				b.read.Stop()
 				b.closeView(false) // retry with a fresh renderer, not the unresponsive one
 				b.err = context.DeadlineExceeded
+				b.flushPainted()
 			}
 		})
 	}
@@ -2662,6 +2831,7 @@ func (a *App) bodyDrawable(b *msgBody, id int64) {
 	}
 	b.stopAwaitingPaint()
 	logBodyTiming(&b.timing, id)
+	b.flushPainted()
 	if b.printPending {
 		b.printPending = false
 		r := a.mail.reader
@@ -3132,4 +3302,132 @@ func rawMessage(ctx context.Context, svc Service, id int64) ([]byte, error) {
 	}
 	defer os.Remove(path)
 	return os.ReadFile(path)
+}
+
+// prefetched is the open (OpenThread) of a row beside the one shown, read
+// while the reader is idle, so that moving to it shows it with no read
+// first, as keyboard navigation in a mail app should.
+type prefetched struct {
+	read latest
+	ot   *core.OpenedThread // nil until read
+	at   time.Time          // when it was read, by the App's clock
+	// changed are the messages events named while it was read: its answer
+	// is dropped if it holds one, as it may predate the change.
+	changed []int64
+}
+
+// prefetchKeep is how long a prefetched open may show: an event that
+// touches its thread drops it sooner (prefetchEvent).
+const prefetchKeep = time.Minute
+
+// rowRoute is the reader's key for a list row: a thread, or a message in its thread.
+func rowRoute(it mailItem) [2]int64 {
+	if it.Thread {
+		return [2]int64{it.ID, 0}
+	}
+	return [2]int64{it.Msg.ThreadID, it.ID}
+}
+
+// prefetch reads the opens of the rows just before and after the one shown,
+// at most two, and drops the others. It runs once the shown thread's body
+// has painted and the calls beside it have started.
+func (r *reader) prefetch() {
+	p := r.p
+	if p == nil || p.a.route.Page != PageMail || r.next != ([2]int64{}) || r.key[0] == 0 {
+		return
+	}
+	rows := p.shown()
+	at := slices.IndexFunc(rows, func(it mailItem) bool { return rowRoute(it) == r.key })
+	want := map[[2]int64]bool{}
+	for _, i := range []int{at + 1, at - 1} {
+		if at >= 0 && i >= 0 && i < len(rows) {
+			want[rowRoute(rows[i])] = true
+		}
+	}
+	for k, pf := range r.pre {
+		if !want[k] {
+			pf.read.Stop()
+			delete(r.pre, k)
+		}
+	}
+	for _, k := range slices.SortedFunc(maps.Keys(want), func(a, b [2]int64) int { return cmp.Compare(a[0], b[0]) }) {
+		if r.pre[k] != nil {
+			continue
+		}
+		if r.pre == nil {
+			r.pre = map[[2]int64]*prefetched{}
+		}
+		pf, open, a := &prefetched{}, r.openThread, p.a
+		r.pre[k] = pf
+		var ot core.OpenedThread
+		pf.read.Run(a, func(ctx context.Context) (err error) {
+			ot, err = open(ctx, k[0], k[1])
+			return err
+		}, func(err error) {
+			if r.pre[k] != pf {
+				return
+			}
+			if err != nil || slices.ContainsFunc(ot.Thread.Messages, func(m core.MessageSummary) bool { return slices.Contains(pf.changed, m.ID) }) {
+				delete(r.pre, k)
+				return
+			}
+			pf.ot, pf.at, pf.changed = &ot, a.clock.Now(), nil
+		})
+	}
+}
+
+// takePrefetched is k's prefetched open, if read and still fresh, taken out
+// of the prefetched ones. A navigation stops the reads still under way.
+func (r *reader) takePrefetched(k [2]int64) *core.OpenedThread {
+	var got *core.OpenedThread
+	if pf := r.pre[k]; pf != nil && pf.ot != nil && r.p.a.clock.Now().Sub(pf.at) < prefetchKeep {
+		got = pf.ot
+	}
+	delete(r.pre, k)
+	for k, pf := range r.pre {
+		if pf.ot == nil {
+			pf.read.Stop()
+			delete(r.pre, k)
+		}
+	}
+	return got
+}
+
+// dropPrefetched drops every prefetched open and stops their reads.
+func (r *reader) dropPrefetched() {
+	for k, pf := range r.pre {
+		pf.read.Stop()
+		delete(r.pre, k)
+	}
+}
+
+// prefetchEvent drops the prefetched opens ev may have changed: those of
+// the threads it names or holding the messages it names, every one when
+// it names none. A read under way is dropped when it lands holding one of
+// the messages named meanwhile.
+func (r *reader) prefetchEvent(ev events.Event) {
+	if len(r.pre) == 0 {
+		return
+	}
+	switch ev.Type {
+	case events.SyncStarted, events.SyncFailed, events.RunsChanged, events.MCPSendsChanged, events.ImportProgress,
+		events.OutboxChanged, events.DraftConflict, events.SkillsChanged, events.ModelsChanged, events.MCPChanged:
+		return // nothing an open reads
+	}
+	if len(ev.ThreadIDs) == 0 && len(ev.MessageIDs) == 0 {
+		r.dropPrefetched()
+		return
+	}
+	for k, pf := range r.pre {
+		switch {
+		case slices.Contains(ev.ThreadIDs, k[0]):
+			pf.read.Stop()
+			delete(r.pre, k)
+		case pf.ot == nil:
+			pf.changed = append(pf.changed, ev.MessageIDs...)
+		case slices.ContainsFunc(pf.ot.Thread.Messages, func(m core.MessageSummary) bool { return slices.Contains(ev.MessageIDs, m.ID) }):
+			pf.read.Stop()
+			delete(r.pre, k)
+		}
+	}
 }

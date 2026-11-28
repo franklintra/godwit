@@ -31,6 +31,17 @@ func gateThread(h *harness, id int64) (release func(), read *atomic.Bool) {
 		}
 		return real(ctx, tid)
 	}
+	open := r.openThread
+	r.openThread = func(ctx context.Context, tid, mid int64) (core.OpenedThread, error) {
+		if tid == id {
+			select {
+			case <-gate:
+			case <-ctx.Done():
+			}
+			defer read.Store(true)
+		}
+		return open(ctx, tid, mid)
+	}
 	return func() { close(gate) }, read
 }
 
@@ -225,19 +236,25 @@ func TestReaderSwitchFailedThreadCanRetry(t *testing.T) {
 	h.openThread(a.ThreadID)
 	va := h.seeBody(a.ID)
 	r := h.app.mail.reader
-	get := r.getThread
+	get, open := r.getThread, r.openThread
 	r.getThread = func(ctx context.Context, id int64) (core.Thread, error) {
 		if id == b.ThreadID {
 			return core.Thread{}, context.DeadlineExceeded
 		}
 		return get(ctx, id)
 	}
+	r.openThread = func(ctx context.Context, tid, mid int64) (core.OpenedThread, error) {
+		if tid == b.ThreadID {
+			return core.OpenedThread{}, context.DeadlineExceeded
+		}
+		return open(ctx, tid, mid)
+	}
 	h.openThread(b.ThreadID)
 	h.see("重试")
 	if !va.closed {
 		t.Fatal("the failed selection left the previous message visible")
 	}
-	r.getThread = get
+	r.getThread, r.openThread = get, open
 	h.click("重试")
 	h.seeBody(b.ID)
 }

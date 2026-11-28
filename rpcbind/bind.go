@@ -258,12 +258,15 @@ var hidden = map[string]bool{
 // by default (testdata/full_methods.txt).
 var uiOnly = map[string]bool{
 	// Remote fetches for the interface's avatars and directory dialog.
-	"SenderAvatar": true, "ContactAvatar": true, "ModelServiceAvatar": true, "PluginReadme": true,
+	"SenderAvatar": true, "ContactAvatar": true, "ContactAvatars": true, "ModelServiceAvatar": true, "PluginReadme": true,
 	// Progress streams for the interface's downloads and directory installs.
 	"InstallPluginFromRegistryStream": true, "PrepareModelStream": true, "DownloadRecognitionModelStream": true,
 	// The reader's two-step body load, remote images downloaded into the disk cache and read
 	// from it (CachedImage fetches a caller-given URL), and the multi-attachment save stream.
 	"GetMessageLazyImages": true, "InlineImagesStream": true, "FetchAttachmentsStream": true,
+	// The reader's one call to open a thread: the thread, its labels and its message's body with
+	// remote images left out, as GetThread, ThreadLabels and GetMessageLazyImages read them.
+	"OpenThread": true,
 	// Attachment cache paths in the data directory, for a same-machine interface's drag
 	// (ADR 0044); full reads attachments with GetAttachment.
 	"CachedAttachments": true,

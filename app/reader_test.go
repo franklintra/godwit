@@ -1285,13 +1285,20 @@ func TestReaderBodyRetry(t *testing.T) {
 	h, accs := mailHarness(t, nil, "alice@example.com")
 	m := h.deliverOne(accs[0], coretest.Msg("bob@example.com", accs[0].Email, "Flaky", "eventually shown"))
 	r := h.app.mail.reader
-	var failed atomic.Bool
+	var failed, openFailed atomic.Bool
 	real := r.getMessage
 	r.getMessage = func(ctx context.Context, id int64, remote bool) (core.Message, error) {
 		if failed.CompareAndSwap(false, true) {
 			return core.Message{}, errors.New("server went away")
 		}
 		return real(ctx, id, remote)
+	}
+	open := r.openThread
+	r.openThread = func(ctx context.Context, tid, mid int64) (core.OpenedThread, error) {
+		if openFailed.CompareAndSwap(false, true) { // the body fails within the open: the thread is read apart
+			return core.OpenedThread{}, errors.New("server went away")
+		}
+		return open(ctx, tid, mid)
 	}
 	h.openThread(m.ThreadID)
 	h.see("server went away")

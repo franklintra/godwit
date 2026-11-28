@@ -215,6 +215,7 @@ func (a *App) onEvent(ev events.Event) {
 			r.loadSkills(true)
 		}
 	}
+	a.mail.reader.prefetchEvent(ev) // at once: a refresh may come after the next open
 	a.dirty = append(a.dirty, ev)
 	a.refreshSoon()
 }

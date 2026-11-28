@@ -210,6 +210,7 @@ type Service interface {
 	TestCapability(ctx context.Context, id int64, in core.ModelServiceInput, c string) (core.CapStatus, error)
 	TestPluginModel(ctx context.Context, ref string) (core.CapStatus, error)
 	ThreadLabels(ctx context.Context, threadIDs []int64) (map[int64][]core.AppliedLabel, error)
+	OpenThread(ctx context.Context, threadID, messageID int64) (core.OpenedThread, error)
 	TrustImageSender(ctx context.Context, from string) error
 	TrustedImageSenders(ctx context.Context) ([]string, error)
 	UnblockSender(ctx context.Context, addr string) error
@@ -239,6 +240,7 @@ type Service interface {
 	UndoSetThreadDeadline(ctx context.Context, before core.RemovedDeadline) error
 	AddAddressBook(ctx context.Context, in core.AddressBookInput) (core.AddressBook, error)
 	ContactAvatar(ctx context.Context, addr string) (core.Avatar, error)
+	ContactAvatars(ctx context.Context, addrs []string) ([]core.Avatar, error)
 	ListAddressBookPresets() []core.AddressBookPreset
 	ListAddressBooks(ctx context.Context) ([]core.AddressBook, error)
 	RemoveAddressBook(ctx context.Context, id int64) error

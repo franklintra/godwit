@@ -54,6 +54,10 @@ func (r *reader) avatarsChanged(why avatarChange) {
 	if r.p != nil && why != settingsSettled {
 		r.p.forgetListAvatars()
 	}
+	for _, b := range r.bodies {
+		b.allowedFresh = false // the policy may have changed since the body was read
+	}
+	r.dropPrefetched() // the opens read beside: their ImagesAllowed too
 	switch why {
 	case trustChanged:
 		r.forgetAvatars(true)
@@ -102,9 +106,16 @@ func (r *reader) loadAvatar(id int64, manual bool) {
 	var image ui.ImageSource
 	var source string
 	var trusted, carddav bool
+	// The body's read has just asked ImagesAllowed: its first avatar asks no
+	// second time. Core checks the policy again before it returns a remote
+	// image, and a change of it forgets the avatar (avatarsChanged).
+	fresh := b.allowedFresh && !manual
+	b.allowedFresh = false
+	allowed := b.allowed
 	b.avatarRun.Run(a, func(ctx context.Context) (err error) {
-		trusted, err = a.svc.ImagesAllowed(ctx, id)
-		if err != nil {
+		if fresh {
+			trusted = allowed
+		} else if trusted, err = a.svc.ImagesAllowed(ctx, id); err != nil {
 			return err
 		}
 		if !manual && !trusted {
@@ -127,7 +138,7 @@ func (r *reader) loadAvatar(id int64, manual bool) {
 			return nil
 		}
 		image, err = avatarImage(avatar)
-		if err == nil && !manual && !carddav {
+		if err == nil && !manual && !carddav && !fresh {
 			trusted, err = a.svc.ImagesAllowed(ctx, id)
 			if !trusted {
 				image = nil

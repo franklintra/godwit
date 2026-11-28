@@ -169,6 +169,16 @@ func gateBody(r *reader, message int64) (reading <-chan struct{}, release func()
 		}
 		return real(ctx, id, remote)
 	}
+	// An open reads the body with its thread: leave it out, so the reader
+	// reads it apart, as it does a message expanded later.
+	open := r.openThread
+	r.openThread = func(ctx context.Context, tid, mid int64) (core.OpenedThread, error) {
+		ot, err := open(ctx, tid, mid)
+		if ot.MessageID == message {
+			ot.Message = core.Message{}
+		}
+		return ot, err
+	}
 	var once sync.Once
 	return in, func() { once.Do(func() { close(gate) }) }
 }

@@ -8,6 +8,7 @@ CachedImageDims
 CancelTrayQuit
 ConfirmSummaryService
 ContactAvatar
+ContactAvatars
 CountUnrepliedToSummarize
 DevPreviewSignInCode
 DownloadRecognitionModelStream
@@ -22,6 +23,7 @@ InlineImagesStream
 InstallPluginFromRegistryStream
 ModelServiceAvatar
 OpenPGPMessage
+OpenThread
 PluginReadme
 PrepareModelStream
 PreviewAccountImportFile

@@ -193,6 +193,10 @@ func (cl *Client) ContactAvatar(ctx context.Context, addr string) (core.Avatar, 
 	return call[core.Avatar](cl, ctx, "ContactAvatar", addr)
 }
 
+func (cl *Client) ContactAvatars(ctx context.Context, addrs []string) ([]core.Avatar, error) {
+	return call[[]core.Avatar](cl, ctx, "ContactAvatars", addrs)
+}
+
 func (cl *Client) ContactDetail(ctx context.Context, addr string) (core.ContactDetail, error) {
 	return call[core.ContactDetail](cl, ctx, "ContactDetail", addr)
 }
@@ -551,6 +555,10 @@ func (cl *Client) OpenPGPStatus(ctx context.Context) (core.GPGInfo, error) {
 
 func (cl *Client) OpenServerDraft(ctx context.Context, messageID int64) (int64, error) {
 	return call[int64](cl, ctx, "OpenServerDraft", messageID)
+}
+
+func (cl *Client) OpenThread(ctx context.Context, threadID int64, messageID int64) (core.OpenedThread, error) {
+	return call[core.OpenedThread](cl, ctx, "OpenThread", threadID, messageID)
 }
 
 func (cl *Client) PendingLabels(ctx context.Context) (int, error) {
