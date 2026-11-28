@@ -20,7 +20,7 @@ var interactiveMethods = map[string]bool{
 	"GetThread": true, "GetMessage": true, "GetMessageLazyImages": true, "InlineImagesStream": true,
 	"ThreadDeadline": true, "ThreadLabels": true, "ImagesAllowed": true, "TrustedImageSenders": true,
 	"UnsubscribeMethod": true, "PluginCards": true, "PluginTags": true, "CachedAttachments": true,
-	"SummaryArrivalState": true, "MessageLabels": true,
+	"SummaryArrivalState": true, "MessageLabels": true, "OpenPGPMessage": true,
 	// Switching a view, searching.
 	"ListThreads": true, "ListMessages": true, "ViewContents": true, "ViewGroupPage": true, "Search": true,
 	// What the window and compose read for their frame.
@@ -31,7 +31,7 @@ var interactiveMethods = map[string]bool{
 	"NewDraft": true, "NewMailtoDraft": true, "OpenDraft": true, "GetDraft": true, "SaveDraft": true,
 	"DeleteDraftIfEmpty": true, "AddAttachment": true, "AddAttachmentAt": true, "RemoveAttachment": true,
 	"RemoveAttachmentAt": true, "SetDraftAccount": true, "SetDraftFrom": true, "ListOutbox": true,
-	"Find": true,
+	"Find": true, "SignatureShown": true,
 	// Clicks that change a mail.
 	"SetFlags": true, "Move": true, "MoveFrom": true, "MoveToRole": true, "ArchiveThreads": true,
 	"ArchiveMessages": true, "Delete": true, "DeleteConversation": true, "SetLabel": true,

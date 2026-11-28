@@ -20,7 +20,7 @@ import (
 // in this process, so the store coordinates:
 //
 //   - W keeps wal_autocheckpoint = 1000 and gets journal_size_limit =
-//     64 MiB, which cuts the file back after a restart.
+//     32 MiB, which cuts the file back after a restart.
 //   - After commits (at most once per checkpointEvery), a PASSIVE
 //     checkpoint on W. It never blocks anyone.
 //   - When it could not copy every frame and the WAL holds more than

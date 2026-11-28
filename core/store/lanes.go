@@ -403,8 +403,9 @@ const (
 	slowInteractive = 250 * time.Millisecond
 	maxSlowLogged   = 512
 	// walSizeLimit is the writer's journal_size_limit: after a checkpoint
-	// restarts the WAL, the file is cut back to this size.
-	walSizeLimit = 64 << 20
+	// restarts the WAL, the file is cut back to this size. Half the 64 MB
+	// budget, so a burst that grows the file past it leaves room.
+	walSizeLimit = 32 << 20
 )
 
 // lanes is DB's connections and their admission. Until Open has migrated

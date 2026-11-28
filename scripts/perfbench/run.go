@@ -26,6 +26,7 @@ type runConfig struct {
 	contMsgs, contBoots, pressRounds, winRounds     int
 	mem                                             int64
 	pressure, winViews                              string
+	backendEnv                                      string
 	idle, statusEvery                               time.Duration
 	statusAccounts                                  int
 	quick                                           bool
@@ -54,6 +55,7 @@ func cmdRun(ctx context.Context, args []string) error {
 	fl.StringVar(&c.winViews, "window-views", "franklin", "saved views the window part keeps: franklin (only the reply-based one, as his database) or fixture (all four)")
 	mem := fl.String("mem", "350M", "memory.max of the pressured backend, page cache included")
 	fl.StringVar(&c.pressure, "pressure", "auto", "pressured parts: auto (when PERFBENCH_CGROUP is set), on, off")
+	fl.StringVar(&c.backendEnv, "backend-env", "", "extra KEY=VALUE settings for every backend, comma-separated (a diagnosis, such as MALLOC_ARENA_MAX=2)")
 	fl.IntVar(&c.syncMsgs, "sync-messages", 10000, "messages in the folder the sync and contention parts sync (quick: 4000)")
 	fl.StringVar(&c.db, "db", "", "measure a copy of this real database instead of the fixture (see README: run.sh -db isolates the run)")
 	fl.StringVar(&c.scratch, "scratch", "", "with -db: the directory the one copy lives in (required)")
@@ -173,6 +175,10 @@ func run(ctx context.Context, c runConfig) error {
 		}
 		o := &opener{bin: c.bin, data: filepath.Join(scratch, meta.DataDir), settle: 1500 * time.Millisecond,
 			env: backendEnv(scratch, filepath.Join(scratch, meta.KeyringFile), filepath.Join(scratch, meta.KeyringKey))}
+		if c.backendEnv != "" {
+			o.env = append(o.env, strings.Split(c.backendEnv, ",")...)
+			log.Printf("backend env: %s", c.backendEnv)
+		}
 		// the build's first open of this copy, not an opening: what it does
 		// once (a fork step, a new migration) is recorded apart, as open.first
 		o.group = g

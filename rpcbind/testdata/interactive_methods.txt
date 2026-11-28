@@ -38,6 +38,7 @@ MoveToRole
 NewDraft
 NewMailtoDraft
 OpenDraft
+OpenPGPMessage
 PluginCards
 PluginTags
 RemoveAttachment
@@ -49,6 +50,7 @@ SetDraftFrom
 SetFlags
 SetLabel
 SetUIForeground
+SignatureShown
 SummaryArrivalState
 TaskModel
 ThreadDeadline
