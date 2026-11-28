@@ -208,6 +208,13 @@ func run(ctx context.Context, c runConfig) error {
 			if err := premove(ctx, o, before, rep, "premove"); err != nil {
 				return nil, 0, err
 			}
+			// the move read and wrote every body through the page cache:
+			// forget it, and open once more, so the part starts as it
+			// does without a move (after one open of a cold copy)
+			dropCache(o.data)
+			if _, _, _, err := o.open(ctx, false, false); err != nil {
+				return nil, 0, fmt.Errorf("open after the move: %w", err)
+			}
 			o.group = nil
 		}
 		if rdb != nil && !targets {

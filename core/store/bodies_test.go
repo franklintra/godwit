@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -320,13 +321,13 @@ func TestBodiesTriggersComeBack(t *testing.T) {
 	ftsIntact(t, db)
 }
 
-// upstreamAU is messages_au as upstream's migrations made it last.
-func upstreamAU(t *testing.T) string {
+// upstreamTrigger is trigger name as upstream's migrations made it last.
+func upstreamTrigger(t *testing.T, name string) string {
 	t.Helper()
 	last := ""
 	for _, m := range store.Migrations {
 		for _, s := range m {
-			if regexp.MustCompile(`(?i)^\s*CREATE\s+TRIGGER\s+messages_au\b`).MatchString(s) {
+			if regexp.MustCompile(`(?i)^\s*CREATE\s+TRIGGER\s+` + name + `\b`).MatchString(s) {
 				last = s
 			}
 		}
@@ -334,6 +335,8 @@ func upstreamAU(t *testing.T) string {
 	require.NotEmpty(t, last)
 	return last
 }
+
+func upstreamAU(t *testing.T) string { return upstreamTrigger(t, "messages_au") }
 
 func sameSQL(a, b string) bool {
 	sp := regexp.MustCompile(`\s+`)
@@ -372,8 +375,8 @@ func TestBodiesUndo(t *testing.T) {
 	for _, row := range rows.Values {
 		name := store.Str(row[0])
 		assert.NotContains(t, []string{"message_bodies_ai", "message_bodies_au", "messages_body_move", "messages_body_move_au"}, name)
-		if name == "messages_au" {
-			assert.True(t, sameSQL(upstreamAU(t), store.Str(row[1])), "upstream's messages_au is back")
+		if name == "messages_au" || name == "messages_ai" {
+			assert.True(t, sameSQL(upstreamTrigger(t, name), store.Str(row[1])), "upstream's %s", name)
 		}
 	}
 	meta, err := db.Query(ctx, "SELECT count(*) FROM meta WHERE key LIKE 'fork.bodies%'")
@@ -431,7 +434,8 @@ func TestBodiesSafetyTriggers(t *testing.T) {
 	})
 	require.NoError(t, err)
 	onePlace(t, db, map[int64]body{1: {"bravo content", "<p>beta</p>"}, 2: {"charlie text", nil}})
-	assert.Equal(t, int64(1), match("charlie"), "the sync writers' path indexes the body")
+	assert.Equal(t, int64(1), match("charlie"), "a body stored after its message is indexed")
+
 	exec(t, db, "UPDATE message_bodies SET body_text = 'delta text' WHERE message_id = 2")
 	assert.Equal(t, int64(1), match("delta"))
 	assert.Zero(t, match("charlie"))
@@ -492,6 +496,18 @@ func TestBodyWriteCost(t *testing.T) {
 		db, err := store.Open(ctx, filepath.Join(dir, "godwit.db"))
 		require.NoError(t, err)
 		exec(t, db, "INSERT INTO accounts(id, email) VALUES (1, 'a@b.c')")
+		// GODWIT_BODY_WRITECOST_PREFILL=n: n messages first, so the
+		// full-text index and the tables have a real size
+		prefill, _ := strconv.Atoi(os.Getenv("GODWIT_BODY_WRITECOST_PREFILL"))
+		for i := 0; i < prefill; i += 500 {
+			var stmts []sqlite.Statement
+			for j := i; j < min(prefill, i+500); j++ {
+				stmts = append(stmts, sqlite.Statement{SQL: "INSERT INTO messages(account_id, subject, from_addr, body_text, body_html) VALUES (1, ?, 'x@y.z', ?, ?)",
+					Args: []any{fmt.Sprint("p", j), fmt.Sprint(j, " ", text), html}})
+			}
+			_, err := db.Transaction(ctx, stmts)
+			require.NoError(t, err)
+		}
 		_, err = db.Query(ctx, "PRAGMA wal_autocheckpoint = 0")
 		require.NoError(t, err)
 		_, err = db.Query(ctx, "PRAGMA wal_checkpoint(TRUNCATE)")
@@ -499,12 +515,13 @@ func TestBodyWriteCost(t *testing.T) {
 		start := time.Now()
 		for i := range n {
 			var stmts []sqlite.Statement
-			if path == "direct" {
+			switch path {
+			case "direct": // the sync writers': the message, then its body
 				stmts = []sqlite.Statement{
 					{SQL: "INSERT INTO messages(account_id, subject, from_addr) VALUES (1, ?, 'x@y.z')", Args: []any{fmt.Sprint("s", i)}},
 					{SQL: "INSERT INTO message_bodies(message_id, body_text, body_html) VALUES (last_insert_rowid(), ?, ?)", Args: []any{text, html}},
 				}
-			} else {
+			default:
 				stmts = []sqlite.Statement{{SQL: "INSERT INTO messages(account_id, subject, from_addr, body_text, body_html) VALUES (1, ?, 'x@y.z', ?, ?)", Args: []any{fmt.Sprint("s", i), text, html}}}
 			}
 			_, err := db.Transaction(ctx, stmts)
