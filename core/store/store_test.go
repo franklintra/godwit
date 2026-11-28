@@ -95,7 +95,7 @@ func TestForeignKeysCascade(t *testing.T) {
 
 	_, err = db.Execute(ctx, "DELETE FROM accounts WHERE id = 1")
 	require.NoError(t, err)
-	for _, tb := range []string{"accounts", "folders", "messages", "message_locations", "attachments", "messages_fts"} {
+	for _, tb := range []string{"accounts", "folders", "messages", "message_locations", "attachments", "messages_fts", "message_bodies"} {
 		assert.Zero(t, count(t, db, tb), tb)
 	}
 }
@@ -696,7 +696,7 @@ func TestDurableWritesSyncFull(t *testing.T) {
 	wg.Wait()
 	assert.Equal(t, int64(1), syncLevel(), "restored to NORMAL after concurrent durable writes")
 
-	rows, err := db.Query(ctx, "SELECT DISTINCT value FROM meta")
+	rows, err := db.Query(ctx, "SELECT DISTINCT value FROM meta WHERE key NOT LIKE 'fork.%'") // fork rewrites keep their state here
 	require.NoError(t, err)
 	assert.Equal(t, [][]any{{"2"}}, rows.Values, "every durable write observed synchronous = FULL (2)")
 }

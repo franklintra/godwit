@@ -260,7 +260,7 @@ func (db *DB) applyFork(ctx context.Context) error {
 			return fmt.Errorf("store: fork migration %s: %w", m.Name, err)
 		}
 	}
-	return nil
+	return db.ensureRewrites(ctx)
 }
 
 // skipForkObjects drops from an upstream migration the statements that
