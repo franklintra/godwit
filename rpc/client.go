@@ -194,6 +194,16 @@ func (c *Client) StreamErr(events <-chan json.RawMessage) error {
 	return err
 }
 
+type laneHintKey struct{}
+
+// WithLaneHint makes the calls made with ctx carry hint, a lane name such
+// as "ui-background" or "background" that the server knows: a server may
+// run the call at that lower priority, never at a higher one than the
+// connection's role and the method give. An unknown hint is ignored.
+func WithLaneHint(ctx context.Context, hint string) context.Context {
+	return context.WithValue(ctx, laneHintKey{}, hint)
+}
+
 func (c *Client) request(ctx context.Context, method string, args []any, stream bool, drop func(json.RawMessage) bool) (message, *clientStream, error) {
 	if err := ctx.Err(); err != nil {
 		return message{}, nil, err // nothing sent
@@ -215,7 +225,8 @@ func (c *Client) request(ctx context.Context, method string, args []any, stream 
 	p := &pending{ch: make(chan message, 1), stream: stream, drop: drop}
 	c.pending[id] = p
 	c.mu.Unlock()
-	b, _ := json.Marshal(message{JSONRPC: "2.0", ID: json.RawMessage(strconv.FormatUint(id, 10)), Method: method, Params: params})
+	hint, _ := ctx.Value(laneHintKey{}).(string)
+	b, _ := json.Marshal(message{JSONRPC: "2.0", ID: json.RawMessage(strconv.FormatUint(id, 10)), Method: method, Params: params, Lane: hint})
 	if len(b) >= MaxMessage { // the line and its newline must fit
 		c.mu.Lock()
 		delete(c.pending, id)

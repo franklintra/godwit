@@ -124,6 +124,10 @@ type message struct {
 	Params  json.RawMessage `json:"params,omitempty"`
 	Result  json.RawMessage `json:"result,omitempty"`
 	Error   *WireError      `json:"error,omitempty"`
+	// Lane is a request's lane hint (WithLaneHint): Godwit's own member,
+	// which the server may use to lower the call's priority, never to
+	// raise it.
+	Lane string `json:"lane,omitempty"`
 }
 
 var nullID = json.RawMessage("null")
@@ -149,6 +153,10 @@ type conn struct {
 	callCtx context.Context         // ctx, plus what hello attached for dispatched calls
 	kill    context.CancelCauseFunc // closes rwc via AfterFunc
 	wg      sync.WaitGroup
+
+	// callHook, set by hello, wraps each dispatched call's ctx with its
+	// method and lane hint (ServerOptions.CallContext).
+	callHook func(ctx context.Context, method, hint string) context.Context
 
 	qmu    sync.Mutex
 	queue  [][]byte // nil entry = close after flushing what precedes it
@@ -315,6 +323,10 @@ func (c *conn) handle(line []byte) bool {
 		return true
 	}
 	ctx, cancel := context.WithCancel(perftrace.WithRPC(c.callCtx, m.Method))
+	if c.callHook != nil {
+		// On the call's own ctx, so what it attaches ends with the call.
+		ctx = c.callHook(ctx, m.Method, m.Lane)
+	}
 	c.requests[id] = cancel
 	c.active++
 	c.mu.Unlock()

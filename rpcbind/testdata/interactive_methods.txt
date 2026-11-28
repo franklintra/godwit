@@ -1,0 +1,59 @@
+# The ui role's methods whose reads run on the interactive database readers
+# (store.Interactive, ADR 0052), one per line; every other ui call is
+# UIBackground, full and mcp calls are Background. Each name must be callable
+# by the ui role (full_methods.txt + ui_methods.txt).
+# TestInteractiveMethodsPinned fails until rpcbind.interactiveMethods matches.
+AccountIcon
+AddAttachment
+AddAttachmentAt
+AllAccountLabels
+ArchiveMessages
+ArchiveThreads
+CachedAttachments
+Delete
+DeleteConversation
+DeleteDraftIfEmpty
+Find
+GetDraft
+GetMessage
+GetMessageLazyImages
+GetSettings
+GetThread
+ImagesAllowed
+InlineImagesStream
+LabelModelReady
+ListAccounts
+ListAddressBooks
+ListIdentities
+ListLabels
+ListMessages
+ListOutbox
+ListSignatures
+ListThreads
+MessageLabels
+ModelName
+Move
+MoveFrom
+MoveToRole
+NewDraft
+NewMailtoDraft
+OpenDraft
+PluginCards
+PluginTags
+RemoveAttachment
+RemoveAttachmentAt
+SaveDraft
+Search
+SetDraftAccount
+SetDraftFrom
+SetFlags
+SetLabel
+SetUIForeground
+SummaryArrivalState
+TaskModel
+ThreadDeadline
+ThreadLabels
+TrustedImageSenders
+UnsubscribeMethod
+ViewContents
+ViewGroupPage

@@ -52,6 +52,10 @@ type ServerOptions struct {
 	// Context, if set, wraps an authenticated connection's request context for
 	// its role.
 	Context func(ctx context.Context, role string) context.Context
+	// CallContext, if set, wraps each call's own context (it ends when the
+	// call does) for the connection's role, the method and the request's
+	// lane hint ("" when it sent none; see WithLaneHint).
+	CallContext func(ctx context.Context, role, method, hint string) context.Context
 }
 
 // Server serves a Dispatcher on <dataDir>/godwit.sock.
@@ -397,6 +401,14 @@ func (s *Server) hello(ctx context.Context, c *conn, done chan struct{}, params 
 		}
 	}
 	ctx = perftrace.WithClient(ctx, client)
+	if cc := s.opts.CallContext; cc != nil {
+		c.callHook = func(ctx context.Context, method, hint string) context.Context {
+			if w := cc(ctx, role, method, hint); w != nil {
+				return w
+			}
+			return ctx
+		}
+	}
 	allow := func(method string, params []json.RawMessage) error {
 		if !roleOK(method, params) {
 			return ErrForbidden

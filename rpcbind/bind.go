@@ -365,6 +365,7 @@ func ListenWith(dataDir string, svc *core.Service, opts ListenOptions) (*rpc.Ser
 		Codec:           NewCodec(),
 		Redact:          svc.Redact,
 		UIDispatcher:    ui,
+		CallContext:     callContext,
 		Context: func(ctx context.Context, role string) context.Context {
 			switch role {
 			case rpc.RoleFull:

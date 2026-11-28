@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/godwit-email/godwit/core/events"
+	"github.com/godwit-email/godwit/core/store"
 )
 
 type uiSessionKey struct{}
@@ -260,7 +261,7 @@ func (s *Service) SetComposeOpen(ctx context.Context, draftIDs []int64) error {
 // it with their ctx.
 func runCaller(ctx context.Context) context.Context {
 	if uiSessionFromContext(ctx) != nil {
-		return context.WithoutCancel(ctx)
+		return store.WithLane(context.WithoutCancel(ctx), store.Background, "") // the backend's work (ADR 0052)
 	}
 	return ctx
 }
