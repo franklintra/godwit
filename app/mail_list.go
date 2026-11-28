@@ -92,9 +92,19 @@ type mailPage struct {
 	threads bool      // items are threads (Settings.ThreadView when loaded)
 	items   []mailItem
 	cursor  string // where the next page starts; "" once all is loaded
-	list    latest // a page or a refresh in flight: one at a time; a reload drops the one before
-	stalled bool   // the last page failed: no more pages until a refresh
-	older   olderLoad
+	list    latest // a page or a refresh in flight: one at a time; a reload in another view drops the one before
+	// listAgain: a reload came while the list was read in the same view; it
+	// runs once the read lands, so a burst of refreshes reads the list at
+	// most twice.
+	listAgain bool
+	// listLanded: the view's list has landed since the view was set
+	// (MailReady); a trailing reload does not take it back.
+	listLanded bool
+	// waitLoad: a refresh waits for the App's load in flight, to reuse the
+	// accounts, folders and settings it reads.
+	waitLoad bool
+	stalled  bool // the last page failed: no more pages until a refresh
+	older    olderLoad
 	// leaving are the rows advance moved off and the list still shows, until
 	// the next reload: a second action before it must not move back to one.
 	leaving map[string]bool
@@ -150,8 +160,25 @@ type mailPage struct {
 	// The dialogs' own: kit.Dialog times its fade by this address, so it must outlive the frame.
 	viewLeaveOpen, viewDeleteOpen bool
 	viewsCached                   bool   // the last refresh changed nothing they show
-	viewsReading                  bool   // a reload that reads them has not landed
 	viewRefresh                   func() // stops the timer that rereads an open view
+
+	// The views' counts are read apart from the list, after it lands
+	// (viewCounts), so the list never waits for every view to count. A
+	// view's own route still reads them in its list run (listViews), before
+	// its rows, to see whether it was deleted.
+	viewCounts latest
+	viewsStale bool // what they show may have changed since their last read started: read them again
+	listViews  bool // the list run in flight reads them
+
+	// The folders, outbox and starred counts are read by a list run when
+	// countsDue says so; a refresh whose counts wait (App.countsLater) and
+	// a view switch with nothing owed leave them, and the run reads the
+	// list alone with what was read before.
+	countsDue   bool
+	countsKnown bool // a list run has read them
+	listCounts  bool // the list run in flight reads them
+	rowsDue     bool // a refresh whose counts wait: a view's rows are read without the views
+	missed      bool // a refresh came while another page showed: the next switch here reads everything
 
 	exec       func(ctx context.Context, op string, ids []int64, from, folder int64) (core.ArchiveUndo, error) // write; tests wrap it
 	fetched    func()                                                                                          // tests: runs off the UI thread once a reload has read the list
@@ -236,32 +263,134 @@ func (p *mailPage) write(ctx context.Context, op string, ids []int64, from, fold
 }
 
 func (p *mailPage) refresh(dirty []events.Event) {
-	p.viewsCached = viewUnchanged(dirty)
-	p.reload()
+	cached := viewUnchanged(dirty)
+	p.countsDue = true
+	if a := p.a; (a.loads.loading || a.loadAgain) && p.shownView() == p.view {
+		// App.refresh has just asked for a load: the list reads with what it
+		// reads, once it lands (App.load). Another view does not wait.
+		p.reloadLater(cached)
+		p.waitLoad = true
+	} else {
+		p.viewsCached = cached
+		p.reload()
+	}
 	p.reader.sync(true)
+}
+
+// shownView is the view the list is to show: the route's, or the one shown
+// while a draft is open.
+func (p *mailPage) shownView() core.View {
+	if p.a.route.Page != PageMail {
+		return p.view // a draft open: the list stays as it was
+	}
+	return p.a.route.View
 }
 
 // reload re-reads the folders, the outbox and the list. In the same view it
 // re-queries the range already loaded (everything, when all was loaded);
-// in a new one it starts again with the first page.
+// in a new one it starts again with the first page. The views' counts are
+// read again after the list, unless the last refresh changed nothing they
+// show.
 func (p *mailPage) reload() {
-	a := p.a
-	v := a.route.View
-	if a.route.Page != PageMail {
-		v = p.view // a draft open: the list stays as it was
+	hint := p.viewsCached
+	p.viewsCached = false
+	p.countsDue = true
+	p.reloadList(hint)
+}
+
+// refreshList is refresh for mail events whose counts wait (App.countsLater):
+// the list is read again as at every refresh, a view's rows without the
+// views; the views, folders, outbox and starred counts stay as they were.
+func (p *mailPage) refreshList() {
+	if !p.waitLoad { // else a reload waits for the load in flight, and reads the list
+		p.rowsDue = true
+		p.reloadList(true)
 	}
+	p.reader.sync(true)
+}
+
+// switchView follows a route change. A saved view's switch reads the views
+// at once (it may be gone; its counts show beside it), as does the outbox's,
+// whose list is the outbox; another view reads its list alone when the
+// counts are as new as the last mail change (none owed): they are the same
+// in every view.
+func (p *mailPage) switchView() {
+	v := p.shownView()
+	_, viewList := savedViewOf(v)
+	fresh := p.countsKnown && p.viewsKnown && !p.missed && !p.a.countsOwed && !viewList && v.Unified != "outbox" && v.Unified != "scheduled"
+	p.missed = false
+	if !fresh {
+		p.refresh(nil)
+		return
+	}
+	p.reloadList(true)
+	p.reader.sync(true)
+}
+
+// reloadLater notes a reload that waits for a read in flight: the views are
+// marked to read again unless cached says the change leaves them as they
+// are. A search reruns at once, as it did before the wait.
+func (p *mailPage) reloadLater(cached bool) {
+	if !cached || !p.viewsKnown && !p.viewsPending() {
+		p.viewsStale = true
+	}
+	if p.searched {
+		p.search()
+	}
+}
+
+// viewsPending reports whether a read of the views is in flight or due.
+func (p *mailPage) viewsPending() bool {
+	return p.viewsStale || p.viewCounts.loading || p.listViews
+}
+
+// reloadList is reload; cached says the changes since the last read leave
+// the views' counts as they were. In the same view it reads one list at a
+// time: a reload while one is read runs once that lands.
+func (p *mailPage) reloadList(cached bool) {
+	a := p.a
+	v := p.shownView()
 	reset := v != p.view
+	if !reset && p.list.loading {
+		p.listAgain = true
+		p.reloadLater(cached)
+		return
+	}
+	p.listAgain = false
+	if p.list.loading {
+		// A switch: Run below drops the run in flight, so what it was to
+		// read is owed again, or the counts and views stay as they were
+		// before it with nothing left to read them.
+		p.countsDue = p.countsDue || p.listCounts
+		p.viewsStale = p.viewsStale || p.listViews
+	}
+	snap := a.fresh // what the App's load read in this refresh, if it just landed
+	if snap == nil || !a.loadAgain {
+		p.waitLoad = false // this read is as new as the refresh that waits
+	}
 	want, toEnd := len(p.items), p.cursor == "" && len(p.items) > 0
 	savedViewID, viewList := savedViewOf(v)
-	cached := p.viewsCached && p.viewsKnown && !reset && !p.viewsReading
-	p.viewsCached = false
-	p.viewsReading = p.viewsReading || !cached // until read: this reload drops the last one's result
+	if !cached || reset && viewList || !p.viewsKnown && !p.viewsPending() {
+		p.viewsStale = true
+	}
+	counts := p.countsDue || !p.countsKnown || snap != nil
+	rows := viewList && p.rowsDue
+	p.countsDue, p.rowsDue = false, false
+	// What a run without the counts reads with.
+	cachedFolders, st := maps.Clone(p.folders), a.settings
+	readViews := viewList && p.viewsStale // a view's rows wait for the views: it may be gone
+	if readViews {
+		p.viewCounts.Stop()
+		p.viewsStale = false
+	}
+	p.listViews, p.listCounts = readViews, counts
 	var viewWant map[string]int
 	if !reset {
 		viewWant = p.viewsKnownCounts()
 	}
 	if reset {
 		p.view, p.items, p.cursor, p.stalled = v, nil, "", false
+		p.listLanded = false
 		p.viewGroups = nil
 		p.stopOlder()
 		p.main.reset()
@@ -288,12 +417,22 @@ func (p *mailPage) reload() {
 		viewGroups   []viewGroupState
 	)
 	p.list.Run(a, func(ctx context.Context) error {
-		accs, err := a.svc.ListAccounts(ctx)
-		if err != nil {
-			return err
+		var accs []core.Account
+		var err error
+		switch {
+		case !counts:
+			folders = cachedFolders
+		case snap != nil:
+			accs = snap.accounts
+		default:
+			if accs, err = a.svc.ListAccounts(ctx); err != nil {
+				return err
+			}
 		}
 		for _, acc := range accs {
-			if folders[acc.ID], err = a.svc.ListFolders(ctx, acc.ID); err != nil {
+			if snap != nil {
+				folders[acc.ID] = snap.folders[acc.ID]
+			} else if folders[acc.ID], err = a.svc.ListFolders(ctx, acc.ID); err != nil {
 				return err
 			}
 			ob, err := a.svc.ListOutbox(ctx, acc.ID)
@@ -308,15 +447,18 @@ func (p *mailPage) reload() {
 				}
 			}
 		}
-		if starredByAcc, starredTotal, err = a.svc.StarredCounts(ctx); err != nil {
-			return err
-		}
-		st, err := a.svc.GetSettings(ctx)
-		if err != nil {
-			return err
+		if counts {
+			if starredByAcc, starredTotal, err = a.svc.StarredCounts(ctx); err != nil {
+				return err
+			}
+			if snap != nil {
+				st = snap.settings
+			} else if st, err = a.svc.GetSettings(ctx); err != nil {
+				return err
+			}
 		}
 		threads = st.ThreadView
-		if !cached {
+		if readViews {
 			if saved, err = a.svc.SavedViews(ctx); err != nil {
 				return err
 			}
@@ -324,8 +466,8 @@ func (p *mailPage) reload() {
 		draftsAcc, isDrafts := draftsOf(folders, v)
 		switch {
 		case v.Unified == "outbox" || v.Unified == "scheduled" || v == (core.View{}):
-		case viewList && cached:
-		case viewList && !slices.ContainsFunc(saved, func(b core.SavedView) bool { return b.ID == savedViewID }): // deleted: viewsLoaded leaves it
+		case viewList && readViews && !slices.ContainsFunc(saved, func(b core.SavedView) bool { return b.ID == savedViewID }): // deleted: viewsLoaded leaves it
+		case viewList && !readViews && !rows: // nothing a view shows changed: its rows stay
 		case viewList:
 			items, viewGroups, err = fetchView(ctx, a.svc, savedViewID, viewWant)
 		case isDrafts:
@@ -343,26 +485,79 @@ func (p *mailPage) reload() {
 		}
 		return err
 	}, func(err error) {
+		p.listViews, p.listCounts = false, false
 		if err != nil {
+			if readViews {
+				p.viewsStale = true // the next reload reads them again
+			}
+			p.countsDue = p.countsDue || counts
+			p.rowsDue = p.rowsDue || rows
 			a.toastErr(err)
+			p.listDone()
 			return
 		}
 		if threads != p.threads {
 			p.main.reset() // thread IDs and message IDs do not mix
 		}
-		p.folders, p.outbox, p.scheduled, p.drafts, p.threads = folders, outbox, scheduled, drafts, threads
-		p.starredUnread, p.starredUnreadTotal = starredByAcc, starredTotal
-		if viewList && cached {
+		p.folders, p.drafts, p.threads = folders, drafts, threads
+		if counts {
+			p.outbox, p.scheduled = outbox, scheduled
+			p.starredUnread, p.starredUnreadTotal = starredByAcc, starredTotal
+			p.countsKnown = true
+		}
+		if viewList && !readViews && !rows {
 			items, viewGroups, cursor = p.items, p.viewGroups, ""
 		}
 		p.items, p.cursor, p.stalled, p.leaving = items, cursor, false, nil
 		p.viewGroups = viewGroups
-		if !cached {
-			p.views, p.viewsKnown, p.viewsReading = saved, true, false
+		p.listLanded = true
+		if readViews {
+			p.views, p.viewsKnown = saved, true
 			p.viewsLoaded()
 		}
 		p.setDrafts()
 		p.keepViewFresh()
+		p.listDone()
+	})
+}
+
+// listDone follows every list read that lands (a reload, a page): a reload
+// that came meanwhile runs now, and the views' counts are read once the
+// list shows.
+func (p *mailPage) listDone() {
+	if p.listAgain {
+		p.listAgain = false
+		if a := p.a; a.loads.loading || a.loadAgain {
+			p.waitLoad = true // it reads with what the load in flight reads
+		} else {
+			p.reloadList(true) // reloadLater marked the views if they need it
+		}
+	}
+	p.readViews()
+}
+
+// readViews reads the views with their counts, apart from the list and
+// after it, when they may have changed: one read at a time, and one more
+// if a change came while it read.
+func (p *mailPage) readViews() {
+	if !p.viewsStale || p.viewCounts.loading || p.listViews || !p.listLanded {
+		return
+	}
+	a := p.a
+	p.viewsStale = false
+	var saved []core.SavedView
+	p.viewCounts.Run(a, func(ctx context.Context) (err error) {
+		saved, err = a.svc.SavedViews(ctx)
+		return err
+	}, func(err error) {
+		if err != nil {
+			p.viewsStale = true // the next list that lands reads them again
+			a.toastErr(err)
+			return
+		}
+		p.views, p.viewsKnown = saved, true
+		p.viewsLoaded()
+		p.readViews()
 	})
 }
 
@@ -444,6 +639,7 @@ func (p *mailPage) loadMore() {
 		got, next, err = fetchItems(ctx, a.svc, v, threads, cursor, pageSize, false)
 		return err
 	}, func(err error) {
+		defer p.listDone()
 		if err != nil {
 			p.stalled = true
 			a.toastErr(err)
@@ -1244,7 +1440,7 @@ func (p *mailPage) loadOlder() {
 	a := p.a
 	o.folder = f
 	var more bool
-	o.read.Run(a, func(ctx context.Context) (err error) {
+	o.read.RunKeep(a, func(ctx context.Context) (err error) { // it stores what it fetched: let it finish
 		more, err = a.svc.LoadOlder(ctx, f)
 		return err
 	}, func(err error) {
@@ -2179,6 +2375,7 @@ func (p *mailPage) undoPurge(ids []int64) {
 		gone, err = a.svc.UndoPurge(ctx, ids)
 		return err
 	}, func(err error) {
+		a.mailWritten()
 		switch {
 		case errors.Is(err, core.ErrPurgeTooLate):
 			a.toastAs(kit.ToastWarning, i18n.T("mail.purge.too_late"))

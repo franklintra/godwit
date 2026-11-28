@@ -219,13 +219,20 @@ func (s *Service) ContactAvatar(ctx context.Context, addr string) (Avatar, error
 	}
 	hb, _ := json.Marshal(headers)
 	args := append([]any{string(hb)}, left...)
-	rows, err := s.db.Query(ctx, "SELECT m.id FROM messages m WHERE m.from_addr IN (SELECT value FROM json_each(?)) AND "+
-		shownFolder+" IS NOT NULL AND NOT "+shownIn("("+placeholders(len(left))+")")+
-		" ORDER BY m.date DESC, m.id DESC LIMIT 1", args...)
+	rows, err := s.db.Query(ctx, newestFromSQL(len(left)), args...)
 	if err != nil || len(rows.Values) == 0 {
 		return Avatar{}, err
 	}
 	return s.SenderAvatar(ctx, store.Int(rows.Values[0][0]), false)
+}
+
+// newestFromSQL finds the newest received mail from the From headers in
+// its first argument (a JSON array), outside the nLeft folders after it.
+// It reads messages_from alone, by header.
+func newestFromSQL(nLeft int) string {
+	return "SELECT m.id FROM messages m WHERE m.from_addr IN (SELECT value FROM json_each(?)) AND " +
+		shownFolder + " IS NOT NULL AND NOT " + shownIn("("+placeholders(nLeft)+")") +
+		" ORDER BY m.date DESC, m.id DESC LIMIT 1"
 }
 
 func scanCardDAVPhoto(r []any) Avatar {

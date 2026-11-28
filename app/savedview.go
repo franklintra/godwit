@@ -151,6 +151,7 @@ func (p *mailPage) viewMore(group string) {
 		}
 		return withLabels(ctx, a.svc, got)
 	}, func(err error) {
+		defer p.listDone()
 		if err != nil {
 			p.stalled = true
 			a.toastErr(err)

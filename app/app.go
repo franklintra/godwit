@@ -187,6 +187,14 @@ type Route struct {
 	Contact                             string // the contact the contacts page shows, by address
 }
 
+// loadSnap is what a load read that the mail list reads too: a reload in
+// the same refresh takes it instead of asking the Service again.
+type loadSnap struct {
+	accounts []core.Account
+	settings core.Settings
+	folders  map[int64][]core.Folder // by account
+}
+
 // syncBatch is a Sync All in flight: it counts as a sync only once every account finished without failing.
 type syncBatch struct {
 	pending map[int64]bool // accounts whose SyncNow has not returned
@@ -209,7 +217,9 @@ type App struct {
 	gen   uint64 // bumped on every navigation; async results from an older gen are dropped
 
 	fetch         func(ctx context.Context) (core.Settings, []core.Account, error) // what load reads; tests swap it
-	loads         latest                                                           // load's reads; only the newest applies
+	loads         latest                                                           // load's reads: one at a time
+	loadAgain     bool                                                             // a load asked for while one was in flight: it runs once that lands
+	fresh         *loadSnap                                                        // what the load landing now read; nil outside its done
 	loaded        bool
 	loadErr       error // the newest load's error; nil once a load succeeds
 	loadFailing   bool  // loads have failed since the last success: toast once per streak
@@ -270,6 +280,15 @@ type App struct {
 	dirty             []events.Event // events since the last refresh
 	refreshStop       func()         // the pending throttled refresh; nil when none
 	events, refreshes int            // counted for tests: refreshes stay far fewer than events
+
+	// The counts (accounts, folders' and views' unread, starred, outbox)
+	// are read at most once per countsEvery while mail events keep coming
+	// (countsLater); the list is read at every refresh.
+	countsAt      time.Time // when the last refresh that read them ran; zero before one
+	countsOwed    bool      // a refresh since then left them as they were: countsTimer reads them
+	countsTimer   func()    // stops the trailing refresh that reads them; nil when none
+	countsTimerAt time.Time // when countsTimer fires
+	countsNow     bool      // mail written here landed: the next refresh reads them, at once
 
 	syncBatch  *syncBatch          // the Sync All in flight; nil when none
 	syncing    map[int64]bool      // accounts syncing now
@@ -416,9 +435,16 @@ func (a *App) readLatest() {
 	})
 }
 
-// load re-reads accounts, settings and unread counts; only the newest
-// load's result applies. The first load picks the start route.
+// load re-reads accounts, settings and unread counts. One load reads at a
+// time: one asked for meanwhile runs once it lands, so a burst of events
+// costs at most two. The first load picks the start route. A mail list
+// refresh waiting for the load (mailPage.waitLoad) reads with what it read.
 func (a *App) load() {
+	if a.loads.loading {
+		a.loadAgain = true
+		return
+	}
+	a.loadAgain = false
 	var accs []core.Account
 	var st core.Settings
 	var unread map[int64]int
@@ -432,6 +458,7 @@ func (a *App) load() {
 	var trusted, blocked []string
 	listsRead := false
 	inbox := 0
+	folders := map[int64][]core.Folder{}
 	fetch, ver, blockedVer := a.fetch, a.settingsVer, a.blockedVer
 	settled := ver == a.settingsSavedVer // no local change waits for its save
 	a.loads.Run(a, func(ctx context.Context) error {
@@ -460,6 +487,7 @@ func (a *App) load() {
 			if err != nil {
 				return err
 			}
+			folders[acc.ID] = fs
 			unread[acc.ID] = 0 // every account has a key, folders or not
 			for _, f := range fs {
 				if f.Role == "junk" || f.Role == "trash" { // as the sidebar's folder rows count
@@ -473,6 +501,10 @@ func (a *App) load() {
 		}
 		return nil
 	}, func(err error) {
+		if err == nil {
+			a.fresh = &loadSnap{accounts: accs, settings: st, folders: folders}
+		}
+		defer a.loadLanded()
 		a.loadErr = err
 		if err != nil {
 			if a.loaded && !a.loadFailing { // the first load's error shows in place of the shell
@@ -566,6 +598,24 @@ func (a *App) load() {
 	})
 }
 
+// loadLanded follows a load's done: the mail list's reload that waited for
+// it reads with what it read (a.fresh, cleared here), then the load asked
+// for meanwhile runs, if any. A refresh that came during this load asked
+// for that one: the list reads again once it lands too. So a steady stream
+// of events still moves the list on, once per load.
+func (a *App) loadLanded() {
+	again := a.loadAgain
+	if p := a.mail; p.waitLoad {
+		p.waitLoad = false
+		p.reloadList(true) // reloadLater marked the views if they need it
+		p.waitLoad = p.waitLoad || again
+	}
+	a.fresh = nil
+	if again {
+		a.load()
+	}
+}
+
 // Busy reports whether work the user started runs in this process and ends
 // with it: a model's or 识别模型's download, a local archive's import, an
 // attachment's download. UI thread.
@@ -574,13 +624,16 @@ func (a *App) Busy() bool {
 	return len(p.models.downloads) > 0 || p.recognition.download != nil || len(a.mail.imports) > 0 || len(a.downloads) > 0
 }
 
-// MailReady reports whether the initial load has settled on onboarding or a
-// loaded mail list. UI thread.
+// MailReady reports whether the initial load has settled on onboarding or
+// on the mail list: the route's list has landed since its view was set. A
+// reread after it (a refresh, the views' counts) does not take it back. UI
+// thread.
 func (a *App) MailReady() bool {
 	if !a.loaded {
 		return false
 	}
-	return a.route.Page == PageOnboarding || (a.route.Page == PageMail && !a.mail.list.loading)
+	p := a.mail
+	return a.route.Page == PageOnboarding || (a.route.Page == PageMail && p.view == a.route.View && p.listLanded)
 }
 
 // Close cancels all work in flight, attachment downloads included, whose

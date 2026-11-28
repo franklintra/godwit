@@ -125,6 +125,43 @@ var ForkMigrations = []ForkMigration{{
 		`ALTER TABLE drafts ADD COLUMN format TEXT NOT NULL DEFAULT 'html'`,
 		`ALTER TABLE accounts ADD COLUMN compose_format TEXT NOT NULL DEFAULT ''`,
 	},
+}, {
+	Name: "perf-indexes",
+	Stmts: []string{
+		// Unread mail only: the folder, starred and view counts read their
+		// rows through it, so they scale with unread mail, not all mail. A
+		// query uses it only when its WHERE holds this term as written,
+		// instr(m.flags, '\Seen') = 0 (COALESCE or another spelling does
+		// not match). An existing database builds it once at its next
+		// open: one scan of every message's flags.
+		`CREATE INDEX messages_unseen ON messages(account_id, thread_id) WHERE instr(flags, '\Seen') = 0`,
+		// Newest threads first across accounts: a unified list walks it and
+		// stops at its page instead of sorting every thread.
+		`CREATE INDEX threads_last_date ON threads(last_date DESC, id DESC)`,
+	},
+}, {
+	Name: "scan-indexes",
+	Stmts: []string{
+		// Every message by sender: the contacts gathering (Find, the
+		// Contacts page), a sender's From headers (a LIKE on from_addr,
+		// which no index range serves: it scans this instead of the
+		// table) and a contact's newest mail (ContactAvatar) read it
+		// alone, not the message rows that inline bodies spread over
+		// the whole file. id is spelled out after date so a sender's
+		// mail of one date stays in id order, as a scan of the table
+		// gave it: a bare column beside max(m.date) keeps the same row.
+		// Building it reads every message's leading columns once.
+		`CREATE INDEX messages_from ON messages(from_addr, date, id, account_id, flags)`,
+		// The same for mail with a List-Unsubscribe header: a contact's
+		// newest list mail. list_unsubscribe sits after the inline bodies,
+		// so the test is octet_length, which SQLite answers from the row's
+		// header without reading the value: building this reads no more
+		// than messages_from. A query uses it only with this term as
+		// written; the last column lets it answer the term from the index.
+		`CREATE INDEX messages_from_list ON messages(from_addr, date, id, account_id, octet_length(list_unsubscribe)) WHERE octet_length(list_unsubscribe) > 0`,
+		// Content-ID first: GROUP BY cid reads the index, not the images.
+		`CREATE INDEX signature_images_cid ON signature_images(cid, content_type)`,
+	},
 }}
 
 // schemaObject is what an additive statement creates.

@@ -236,8 +236,9 @@ func TestSkillsChangedWithMailEventsRefreshesMail(t *testing.T) {
 	a, _, _ := skillRefreshApp(t)
 	a.route = Route{Page: PageMail, ThreadID: 1}
 	a.refresh([]events.Event{{Type: events.SkillsChanged}, {Type: events.MessagesChanged}})
-	if a.loads.Gen() != 1 || a.mail.list.Gen() != 1 || a.mail.reader.read.Gen() != 1 {
-		t.Fatalf("mixed events skipped mail refresh: shell=%d mail=%d reader=%d", a.loads.Gen(), a.mail.list.Gen(), a.mail.reader.read.Gen())
+	// The mail list waits for the load to land and reads with what it read.
+	if a.loads.Gen() != 1 || !a.mail.waitLoad || a.mail.reader.read.Gen() != 1 {
+		t.Fatalf("mixed events skipped mail refresh: shell=%d mail waits %v reader=%d", a.loads.Gen(), a.mail.waitLoad, a.mail.reader.read.Gen())
 	}
 }
 

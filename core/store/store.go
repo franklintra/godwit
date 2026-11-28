@@ -12,8 +12,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/plugins/sqlite"
+	"github.com/godwit-email/godwit/internal/perftrace"
 )
 
 // ErrNewerDatabase is returned when the database was written by a newer Godwit.
@@ -34,6 +36,7 @@ func Open(ctx context.Context, path string) (*DB, error) {
 		return nil, err
 	}
 	raw, err := sqlite.Open(ctx, path, sqlite.OpenOptions{})
+	perftrace.Mark("store.sqlite_open")
 	if err != nil {
 		return nil, err
 	}
@@ -43,6 +46,43 @@ func Open(ctx context.Context, path string) (*DB, error) {
 		return nil, err
 	}
 	return db, nil
+}
+
+// Query is sqlite.DB's, timed for perftrace's SQL trace when it is on.
+func (db *DB) Query(ctx context.Context, sql string, args ...any) (sqlite.Rows, error) {
+	if !perftrace.SQLOn() {
+		return db.DB.Query(ctx, sql, args...)
+	}
+	t := time.Now()
+	r, err := db.DB.Query(ctx, sql, args...)
+	perftrace.SQL(ctx, "q", sql, t)
+	return r, err
+}
+
+// Execute is sqlite.DB's, timed as Query is.
+func (db *DB) Execute(ctx context.Context, sql string, args ...any) (sqlite.Result, error) {
+	if !perftrace.SQLOn() {
+		return db.DB.Execute(ctx, sql, args...)
+	}
+	t := time.Now()
+	r, err := db.DB.Execute(ctx, sql, args...)
+	perftrace.SQL(ctx, "x", sql, t)
+	return r, err
+}
+
+// Transaction is sqlite.DB's, timed as Query is (by its first statement).
+func (db *DB) Transaction(ctx context.Context, stmts []sqlite.Statement) ([]sqlite.Result, error) {
+	if !perftrace.SQLOn() {
+		return db.DB.Transaction(ctx, stmts)
+	}
+	t := time.Now()
+	r, err := db.DB.Transaction(ctx, stmts)
+	first := ""
+	if len(stmts) > 0 {
+		first = stmts[0].SQL
+	}
+	perftrace.SQL(ctx, fmt.Sprintf("t%d", len(stmts)), first, t)
+	return r, err
 }
 
 // DurableTransaction runs stmts in a Transaction with synchronous = FULL
@@ -117,6 +157,7 @@ func (db *DB) init(ctx context.Context, path string) error {
 			return err
 		}
 	}
+	perftrace.Mark("store.pragmas")
 	if cur > 0 && cur < PiMessagesVersion {
 		backup(ctx, db, path, cur)
 	}
@@ -134,11 +175,15 @@ func (db *DB) init(ctx context.Context, path string) error {
 			return fmt.Errorf("store: migration %d: %w", v, err)
 		}
 	}
+	perftrace.Mark("store.migrations")
 	if err := db.applyFork(ctx); err != nil {
 		return err
 	}
+	perftrace.Mark("store.fork")
 	dropBackups(path, cur)
-	return db.convertAutoVacuum(ctx)
+	err = db.convertAutoVacuum(ctx)
+	perftrace.Mark("store.auto_vacuum")
+	return err
 }
 
 // backup copies the database at path, at schema version cur, to

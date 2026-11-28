@@ -334,6 +334,48 @@ func (s *Service) enabledCardComponents(ctx context.Context, skip map[string]boo
 	return comps, addrToComp, nil
 }
 
+// contactsSQL is what contacts reads of the mail: per From header, the
+// mail received (received) and the newest with a List-Unsubscribe header
+// (lists), both with args; and the user's own mail, oldest first (ours,
+// with oursArgs).
+type contactsSQL struct {
+	received, lists, ours string
+	args, oursArgs        []any
+}
+
+// contactQueries are contacts' statements for the folders left out of a
+// contact's mail (left), the Sent folders and accountID (0: all). None
+// reads a message row but the user's own mail: received walks
+// messages_from and lists messages_from_list, both by sender and date, and
+// ours starts from the Sent folders' locations. The account test is
+// +m.account_id, so no index on account_id draws the plan back to the
+// table.
+func contactQueries(left, sent []any, accountID int64) contactsSQL {
+	acc, accArgs := "", []any(nil)
+	if accountID != 0 {
+		acc, accArgs = " AND +m.account_id = ?", []any{accountID}
+	}
+	from := " FROM messages m WHERE " + shownFolder + " IS NOT NULL AND NOT " + shownIn("("+placeholders(len(left))+")") + acc
+	args := append(slices.Clone(left), accArgs...)
+	return contactsSQL{
+		// A bare column beside max() (m.id here and in lists) comes from the
+		// first row holding the max: the indexes keep a sender's mail of one
+		// date in id order, so it is the lowest id. A scan of the table gave
+		// the same; for one account the plan walked messages_account_date
+		// before, which gave the highest.
+		received: `SELECT m.from_addr, count(*), sum(instr(m.flags, '\Seen') = 0), sum(` + shownIn("(SELECT id FROM folders WHERE role = 'inbox')") + `), max(m.date), m.id` +
+			from + " GROUP BY m.from_addr ORDER BY 5, 1",
+		// octet_length is list_unsubscribe <> '' read from the row's header:
+		// the value sits after the inline bodies. messages_from_list holds
+		// these rows only, and a query uses it with this term as written.
+		lists: "SELECT m.from_addr, max(m.date), m.id" + from + " AND octet_length(m.list_unsubscribe) > 0 GROUP BY m.from_addr",
+		ours: "SELECT m.to_addrs, m.cc_addrs, m.date FROM messages m WHERE m.id IN (SELECT l.message_id FROM message_locations l WHERE l.shown AND l.folder_id IN (" +
+			placeholders(len(sent)) + "))" + acc + " ORDER BY m.date",
+		args:     args,
+		oursArgs: append(slices.Clone(sent), accArgs...),
+	}
+}
+
 // contacts gathers the contacts of accountID's mail (0: every account's plus
 // zero-mail enabled address-book contacts).
 func (s *Service) contacts(ctx context.Context, accountID int64) ([]Contact, error) {
@@ -361,25 +403,17 @@ func (s *Service) contacts(ctx context.Context, accountID int64) ([]Contact, err
 	if err != nil {
 		return nil, err
 	}
-	acc, accArgs := "", []any(nil)
-	if accountID != 0 {
-		acc, accArgs = " AND m.account_id = ?", []any{accountID}
-	}
-	from := " FROM messages m WHERE " + shownFolder + " IS NOT NULL AND NOT " + shownIn("("+placeholders(len(left))+")") + acc
-	args := append(slices.Clone(left), accArgs...)
+	q := contactQueries(left, sent, accountID)
 	// shortcut: gathers every contact in Go on each call; keep a contacts table if large stores get slow.
-	// A bare column beside max() (m.id here and below) comes from the row holding the max.
-	rows, err := s.db.Query(ctx, `SELECT m.from_addr, count(*), sum(instr(m.flags, '\Seen') = 0), sum(`+shownIn("(SELECT id FROM folders WHERE role = 'inbox')")+`), max(m.date), m.id`+
-		from+" GROUP BY m.from_addr ORDER BY 5, 1", args...)
+	rows, err := s.db.Query(ctx, q.received, q.args...)
 	if err != nil {
 		return nil, err
 	}
-	lists, err := s.db.Query(ctx, "SELECT m.from_addr, max(m.date), m.id"+from+" AND m.list_unsubscribe <> '' GROUP BY m.from_addr", args...)
+	lists, err := s.db.Query(ctx, q.lists, q.args...)
 	if err != nil {
 		return nil, err
 	}
-	out, err := s.db.Query(ctx, "SELECT m.to_addrs, m.cc_addrs, m.date FROM messages m WHERE "+shownIn("("+placeholders(len(sent))+")")+acc+" ORDER BY m.date",
-		append(slices.Clone(sent), accArgs...)...)
+	out, err := s.db.Query(ctx, q.ours, q.oursArgs...)
 	if err != nil {
 		return nil, err
 	}
@@ -658,7 +692,7 @@ func (s *Service) fromHeadersForAddrs(ctx context.Context, keys []string) ([]str
 		}
 		cond = "(" + strings.Join(parts, " OR ") + ")"
 	}
-	rows, err := s.db.Query(ctx, "SELECT DISTINCT from_addr FROM messages WHERE "+cond, args...)
+	rows, err := s.db.Query(ctx, fromHeadersSQL+cond, args...)
 	if err != nil {
 		return nil, err
 	}
