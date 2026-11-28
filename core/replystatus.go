@@ -241,7 +241,7 @@ func (s *Service) replyStatusesOf(ctx context.Context, now int64, roles map[int6
 		engaged bool // the user took part in it, or has written to its sender
 	}
 	var convs []active
-	var undecided []*logicalMail // newest mail only directMail can decide on: it needs listHeaders
+	var undecided []*logicalMail // newest mail only directMail's headers can decide on: it needs listHeaders
 	for tid, msgs := range threads {
 		var newest *logicalMail
 		engaged := false
@@ -256,7 +256,9 @@ func (s *Service) replyStatusesOf(ctx context.Context, now int64, roles map[int6
 		}
 		engaged = engaged || people.known[gomail.AddrKey(newest.from)] || people.known[gomail.AddrKey(newest.replyTo)]
 		convs = append(convs, active{tid, newest, engaged})
-		if _, _, decided := settledReplyStatus(newest, people, marks[tid], repliedAt[tid]); !decided {
+		// Mail its addresses already rule out as direct needs no headers:
+		// directMail is false whatever they say.
+		if _, _, decided := settledReplyStatus(newest, people, marks[tid], repliedAt[tid]); !decided && directByAddrs(newest, people, engaged) {
 			undecided = append(undecided, newest)
 		}
 	}
@@ -309,17 +311,21 @@ func (s *Service) logicalMails(ctx context.Context, roles map[int64]string, cond
 // logicalMailsSQL is the query logicalMails runs with cond. Its columns all
 // come before the bodies in a messages row (CREATE TABLE messages), so a
 // row's body overflow pages are never read; listHeaders reads the columns
-// added after them.
+// added after them. CROSS JOIN keeps threads outer: the date condition reads
+// threads_last_date, then messages_thread gives each conversation's mail.
+// With a plain JOIN, ORDER BY m.id made SQLite scan every message row in id
+// order, a read of the whole table that the page cache does not hold.
 func logicalMailsSQL(cond string) string {
 	return `SELECT m.thread_id, m.id, COALESCE(m.message_id, ''), COALESCE(m.date, 0), m.from_addr, m.to_addrs, m.cc_addrs, m.reply_to,
-		m.flags, ` + shownFolders + ` FROM messages m JOIN threads t ON t.id = m.thread_id
+		m.flags, ` + shownFolders + ` FROM threads t CROSS JOIN messages m ON m.thread_id = t.id
 		WHERE ` + cond + ` AND ` + notPurgedCond + ` ORDER BY m.id`
 }
 
 // listHeaders reads the list and automation headers of msgs, which
 // directMail asks: these columns come after the bodies in a messages row, so
 // reading them walks each body's overflow pages. Only the newest mail of a
-// conversation nothing else has decided on needs them.
+// conversation that nothing else has decided on, and that directByAddrs
+// leaves to the headers, needs them.
 func (s *Service) listHeaders(ctx context.Context, msgs []*logicalMail) error {
 	if len(msgs) == 0 {
 		return nil
@@ -497,18 +503,14 @@ func impersonalSender(addr string) bool {
 // engaged false, the user has had nothing to do with its sender yet, so a
 // role's or a mailing service's address doesn't count either.
 func directMail(m *logicalMail, p mailPeople, engaged bool) bool {
+	return directByAddrs(m, p, engaged) && !bulkHeaders(m)
+}
+
+// directByAddrs is directMail without the list and automation headers: false
+// rules m out, true leaves the headers to decide (bulkHeaders).
+func directByAddrs(m *logicalMail, p mailPeople, engaged bool) bool {
 	isOwn := func(a string) bool { return p.own[ownKey(a)] }
 	if len(m.to) == 0 && len(m.cc) > 0 || len(m.to) > 0 && !slices.ContainsFunc(m.to, isOwn) {
-		return false
-	}
-	if m.listID != "" || m.listUnsub != "" {
-		return false
-	}
-	auto, _, _ := strings.Cut(m.auto, ";")
-	if auto = strings.ToLower(strings.TrimSpace(auto)); auto != "" && auto != "no" {
-		return false
-	}
-	if p := strings.ToLower(strings.TrimSpace(m.precedence)); p == "bulk" || p == "list" || p == "junk" {
 		return false
 	}
 	senders := []string{m.from, m.replyTo}
@@ -516,6 +518,20 @@ func directMail(m *logicalMail, p mailPeople, engaged bool) bool {
 		return false
 	}
 	return engaged || !slices.ContainsFunc(senders, impersonalSender)
+}
+
+// bulkHeaders is whether m's headers (listHeaders) say a list or a machine
+// sent it.
+func bulkHeaders(m *logicalMail) bool {
+	if m.listID != "" || m.listUnsub != "" {
+		return true
+	}
+	auto, _, _ := strings.Cut(m.auto, ";")
+	if auto = strings.ToLower(strings.TrimSpace(auto)); auto != "" && auto != "no" {
+		return true
+	}
+	p := strings.ToLower(strings.TrimSpace(m.precedence))
+	return p == "bulk" || p == "list" || p == "junk"
 }
 
 // archiveMark is what a conversation's newest message was when it was archived.
