@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -85,6 +86,9 @@ func hotOps(m fixtureMeta) []hotOp {
 			return err
 		}},
 	}
+	ops = slices.DeleteFunc(ops, func(op hotOp) bool { // a real account may have no archive or sent folder
+		return op.Name == "list.archive_big" && big.Archive == 0 || op.Name == "list.sent_big" && big.Sent == 0
+	})
 	if m.TopLabel != 0 {
 		ops = append(ops, list("list.label_top", "ListThreads, the label on the most messages", core.View{LabelID: m.TopLabel}))
 	}

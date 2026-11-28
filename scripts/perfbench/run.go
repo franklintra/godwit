@@ -19,13 +19,15 @@ import (
 
 type runConfig struct {
 	bin, root, out, label, commit, webDir, web      string
+	db, scratch, native                             string
 	scale                                           float64
 	seed                                            uint64
 	runs, hotRounds, viewRounds, syncMsgs, syncRuns int
 	contMsgs, contBoots, pressRounds, winRounds     int
 	mem                                             int64
 	pressure, winViews                              string
-	idle                                            time.Duration
+	idle, statusEvery                               time.Duration
+	statusAccounts                                  int
 	quick                                           bool
 	only                                            map[string]bool
 }
@@ -53,6 +55,11 @@ func cmdRun(ctx context.Context, args []string) error {
 	mem := fl.String("mem", "350M", "memory.max of the pressured backend, page cache included")
 	fl.StringVar(&c.pressure, "pressure", "auto", "pressured parts: auto (when PERFBENCH_CGROUP is set), on, off")
 	fl.IntVar(&c.syncMsgs, "sync-messages", 10000, "messages in the folder the sync and contention parts sync (quick: 4000)")
+	fl.StringVar(&c.db, "db", "", "measure a copy of this real database instead of the fixture (see README: run.sh -db isolates the run)")
+	fl.StringVar(&c.scratch, "scratch", "", "with -db: the directory the one copy lives in (required)")
+	fl.StringVar(&c.native, "native-cache", "", "with -db: mygo's native-module cache to give each backend (default: the user cache dir's mygo)")
+	statusAccounts := fl.Int("status-accounts", -1, "window part: small loopback accounts whose idle sync rounds run during the probes (default 0, with -db 3)")
+	fl.DurationVar(&c.statusEvery, "status-every", 5*time.Second, "window part: the time between two status rounds (SyncNow on the next status account)")
 	fl.Parse(args)
 	c.quick = *quick
 	c.runs, c.idle, c.hotRounds, c.viewRounds, c.syncRuns, c.contMsgs, c.contBoots, c.pressRounds = 5, 60*time.Second, 20, 5, 3, 10000, 5, 3
@@ -88,6 +95,15 @@ func cmdRun(ctx context.Context, args []string) error {
 			c.only[strings.TrimSpace(p)] = true
 		}
 	}
+	c.statusAccounts = *statusAccounts
+	if c.db != "" {
+		if err := realConfig(&c); err != nil {
+			return err
+		}
+	}
+	if c.statusAccounts < 0 {
+		c.statusAccounts = 0
+	}
 	if c.bin == "" {
 		return fmt.Errorf("-godwit is required")
 	}
@@ -112,24 +128,49 @@ func cmdRun(ctx context.Context, args []string) error {
 func run(ctx context.Context, c runConfig) error {
 	debug.SetMemoryLimit(1536 << 20) // the harness shares vps-test's 3 GB with the backend and the IMAP server's mail
 	started := time.Now()
-	fxDir, meta, err := ensureFixture(ctx, c.root, c.scale, c.seed, c.bin)
-	if err != nil {
+	var (
+		fxDir string
+		meta  fixtureMeta
+		rdb   *realDB
+		err   error
+	)
+	if c.db != "" {
+		if err := checkIsolated(); err != nil {
+			return fmt.Errorf("-db: %w", err)
+		}
+		rdb = &realDB{src: c.db, native: c.native}
+	} else if fxDir, meta, err = ensureFixture(ctx, c.root, c.scale, c.seed, c.bin); err != nil {
 		return fmt.Errorf("fixture: %w", err)
 	}
 	rep := &report{Format: 1, Label: c.label, Commit: c.commit, Started: started.UTC().Format(time.RFC3339), Quick: c.quick, Fixture: meta, Host: hostInfo()}
 	rep.Host["pressure_mem"] = fmt.Sprintf("%d MiB", c.mem>>20)
 	scratch := filepath.Join(c.root, fmt.Sprintf("scratch-%d", os.Getpid()))
+	if rdb != nil {
+		scratch = filepath.Join(c.scratch, "copy") // c.scratch itself may be a mount point
+	}
 	defer os.RemoveAll(scratch)
-	// fresh copies the fixture into scratch (gone first): each part that
-	// writes starts from the same bytes, with a fresh WAL. The copy's first
-	// open runs in g when it is not nil.
+	targets := false // the real database's targets: read once, from the first copy
+	// fresh copies the fixture (or the real database: realDB.fresh) into
+	// scratch (gone first): each part that writes starts from the same
+	// bytes, with a fresh WAL. The copy's first open runs in g when it is
+	// not nil.
 	fresh := func(g *pressureGroup) (*opener, error) {
 		os.RemoveAll(scratch)
 		t0 := time.Now()
-		if err := copyFixture(fxDir, scratch); err != nil {
-			return nil, fmt.Errorf("copy fixture: %w", err)
+		if rdb != nil {
+			m, err := rdb.fresh(scratch)
+			if err != nil {
+				return nil, fmt.Errorf("copy the database: %w", err)
+			}
+			if !targets {
+				meta = m
+			}
+		} else {
+			if err := copyFixture(fxDir, scratch); err != nil {
+				return nil, fmt.Errorf("copy fixture: %w", err)
+			}
+			log.Printf("copied the fixture in %s", time.Since(t0).Round(time.Millisecond))
 		}
-		log.Printf("copied the fixture in %s", time.Since(t0).Round(time.Millisecond))
 		o := &opener{bin: c.bin, data: filepath.Join(scratch, meta.DataDir), settle: 1500 * time.Millisecond,
 			env: backendEnv(scratch, filepath.Join(scratch, meta.KeyringFile), filepath.Join(scratch, meta.KeyringKey))}
 		// the build's first open of this copy, not an opening: what it does
@@ -145,6 +186,12 @@ func run(ctx context.Context, c runConfig) error {
 			prefix = "pressured.open.first"
 		}
 		r.recordFirst(rep, prefix)
+		if rdb != nil && !targets {
+			if err := rdb.targets(ctx, filepath.Join(o.data, "godwit.db"), &meta); err != nil {
+				return nil, fmt.Errorf("targets: %w", err)
+			}
+			rep.Fixture, targets = meta, true
+		}
 		return o, nil
 	}
 	var group *pressureGroup
@@ -226,7 +273,11 @@ func run(ctx context.Context, c runConfig) error {
 				return err
 			}
 			o.group = g
-			if err := runWindow(ctx, o, mail, meta, c.winRounds, c.winViews, prefix+".window", rep); err != nil {
+			wo := windowOpts{rounds: c.winRounds, views: c.winViews, statusAccounts: c.statusAccounts, statusEvery: c.statusEvery, seed: c.seed}
+			if rdb != nil { // the SQL trace (statement starts, no values) stays, for a later profile
+				wo.keepSQL = filepath.Join(c.root, "results", fmt.Sprintf("%s-%s-%s-sql.tsv", slugify(c.label), started.UTC().Format("20060102-150405"), slugify(prefix)))
+			}
+			if err := runWindow(ctx, o, mail, meta, wo, prefix+".window", rep); err != nil {
 				return fmt.Errorf("%s.window: %w", prefix, err)
 			}
 		}
@@ -288,7 +339,7 @@ func measureSession(ctx context.Context, c runConfig, o *opener, meta fixtureMet
 		return err
 	}
 	defer hc.Close()
-	if m, err := hc.GetMessageLazyImages(ctx, meta.BigMessage, false); err == nil {
+	if m, err := hc.GetMessageLazyImages(ctx, meta.BigMessage, false); err == nil && !meta.Real { // the web part's reader body: never a real one
 		saveReaderBody(m.ID, m.HTML, m.Text)
 	}
 	if c.want("hot") || c.want("mem") {

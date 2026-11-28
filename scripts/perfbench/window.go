@@ -13,6 +13,8 @@ import (
 	"log"
 	"maps"
 	"math/rand/v2"
+	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -69,7 +71,18 @@ const (
 // recipient completion runs). Rounds stop when the sync ends. The SQL
 // trace splits each probe's database time into queueing and running, and
 // says what held the connection.
-func runWindow(ctx context.Context, o *opener, mail *loopMail, meta fixtureMeta, rounds int, views, prefix string, rep *report) error {
+// windowOpts are the window part's settings.
+type windowOpts struct {
+	rounds         int           // probe rounds
+	views          string        // one of windowViews
+	statusAccounts int           // statusRounds' accounts (0: none)
+	statusEvery    time.Duration // between two status rounds
+	seed           uint64
+	keepSQL        string // when set, the backend's SQL trace is copied there
+}
+
+func runWindow(ctx context.Context, o *opener, mail *loopMail, meta fixtureMeta, wo windowOpts, prefix string, rep *report) error {
+	rounds := wo.rounds
 	b, err := startBackend(o.bin, o.data, o.env, o.group, true)
 	if err != nil {
 		return err
@@ -80,9 +93,18 @@ func runWindow(ctx context.Context, o *opener, mail *loopMail, meta fixtureMeta,
 		return err
 	}
 	defer setup.Close()
-	reply, err := shapeForWindow(ctx, setup, meta, views)
+	reply, err := shapeForWindow(ctx, setup, meta, wo.views)
 	if err != nil {
 		return fmt.Errorf("shaping the copy: %w", err)
+	}
+	var status *statusRounds
+	if wo.statusAccounts > 0 {
+		t := time.Now()
+		if status, err = addStatusAccounts(ctx, setup, wo.statusAccounts, wo.seed); err != nil {
+			return fmt.Errorf("status accounts: %w", err)
+		}
+		defer status.close()
+		log.Printf("%s: %d status accounts synced in %s", prefix, wo.statusAccounts, time.Since(t).Round(time.Millisecond))
 	}
 
 	wc, _, err := b.dialUI(ctx, time.Minute, nil, clientWindow)
@@ -189,6 +211,15 @@ func runWindow(ctx context.Context, o *opener, mail *loopMail, meta fixtureMeta,
 	}
 	startN, startAt := stored(), time.Now()
 	log.Printf("%s: sync is writing (%d stored after %s); %d probe rounds with the window open", prefix, startN, startAt.Sub(t0).Round(time.Millisecond), rounds)
+	if status != nil {
+		sc, _, err := b.dialUI(ctx, time.Minute, nil, "perfbench-status")
+		if err != nil {
+			end()
+			return err
+		}
+		defer sc.Close()
+		status.start(ctx, sc, wo.statusEvery)
+	}
 
 	big := meta.Accounts[0]
 	comp := webui.NewCompose()
@@ -363,6 +394,7 @@ func runWindow(ctx context.Context, o *opener, mail *loopMail, meta fixtureMeta,
 		time.Sleep(time.Second)
 	}
 	end()
+	status.close()
 	endN, endAt := stored(), time.Now()
 	rep.add(prefix+".rounds_during_sync", "count", "higher", "probe rounds that started while the sync still wrote", float64(done))
 	rep.add(prefix+".sync_msgs_per_s", "msg/s", "higher", "the account's initial sync while the window was open and probed", float64(endN-startN)/endAt.Sub(startAt).Seconds())
@@ -431,7 +463,24 @@ func runWindow(ctx context.Context, o *opener, mail *loopMail, meta fixtureMeta,
 	for _, s := range topStatements(calls, from, to, 12) {
 		rep.Notes = append(rep.Notes, fmt.Sprintf("%s: held the connection %.0f ms in %d runs (%s) %s", prefix, ms(s.exec), s.n, s.who, s.stmt))
 	}
+	status.record(prefix, mins, rep)
+	rep.Notes = append(rep.Notes, profileNotes(prefix, calls, from, to, 10)...)
+	if wo.keepSQL != "" {
+		if err := keepFile(b.sqlPath, wo.keepSQL); err != nil {
+			rep.Notes = append(rep.Notes, fmt.Sprintf("%s: keeping the SQL trace: %v", prefix, err))
+		} else {
+			rep.Notes = append(rep.Notes, fmt.Sprintf("%s: SQL trace kept in %s", prefix, wo.keepSQL))
+		}
+	}
 	return nil
+}
+
+// keepFile copies src to dst, readable by its owner only.
+func keepFile(src, dst string) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	return copyFile(src, dst)
 }
 
 // trayRound is one of the menu-bar tray's loads (its readSnapshot).
@@ -461,6 +510,9 @@ func shapeForWindow(ctx context.Context, c *uiclient.Client, meta fixtureMeta, v
 		if reply, err = c.SaveView(ctx, replyView()); err != nil {
 			return 0, fmt.Errorf("SaveView: %w", err)
 		}
+	}
+	if meta.Real { // a real database is what it is: its own views and signatures
+		return reply, nil
 	}
 	if views == "franklin" {
 		for _, v := range meta.Views {

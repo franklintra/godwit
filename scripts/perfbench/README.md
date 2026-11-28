@@ -104,6 +104,28 @@ Per probe group, `*_sql_wait_ms` and `*_sql_exec_ms` split its statements' time 
 
 **Web** (`web.*`, `bundle.*`, with `--web`). `web/webboot.ts` (Bun, no npm dependency) serves the build's `web/dist` and loads `reader.html` and `wit.html` in Playwright's Chromium headless shell over the DevTools protocol, with the HTTP cache off. A stand-in for MyGo's bridge (`globalThis.mygo`) answers the pages' calls, and the reader gets the fixture's largest body. Per page: DOMContentLoaded, load, first contentful paint, ready, V8 script time, task time, layout and style, JS heap, DOM nodes. `bundle.*` gives what each page loads before it runs, raw and gzip, and what only dynamic imports load.
 
+## A real database
+
+`-db <file>` runs the parts on a copy of a real Godwit database instead of the fixture. On the VPS, a `VACUUM INTO` copy of Franklin's database is at `/srv/devdata/godwit-realdb/godwit-real.db`. It holds private mail and his real accounts.
+
+```sh
+~/Developer/godwit/.worktrees/vps-test <worktree> \
+  'scripts/perfbench/run.sh -db /srv/devdata/godwit-realdb/godwit-real.db -runs 3 -label <x>'
+```
+
+What the mode does:
+
+- `run.sh` builds as usual, then starts perfbench in a container with `docker run --network none`: the container has its own loopback and no other interface. The source is mounted read-only. The one copy lives in `scratch-<label>/` beside the source (on the encrypted devdata volume). `run.sh` deletes that directory when the run ends, also on failure. A second run with the same label refuses to start while the directory exists.
+- perfbench refuses to start unless only loopback is up and no outside address or host service (for example the IMAP gateway on `127.0.0.1:1143`) answers.
+- Before the build's first start on each copy, perfbench points every account's servers at `127.0.0.1:1`, and the endpoints of model services, MCP servers and address books at nothing, with a raw SQLite connection (no migration). The backends get an empty keyring. Then the first start runs the build's migrations, timed as `open.first.*`.
+- The parts are `open`, `mem`, `hot`, `idle`, `contention` and `window` (the default). `pressure` needs a cgroup the container does not get, `sync` measures an empty database, and `web` would put a real body in a page: they are skipped. Each part that writes starts from a new copy (about 4 GB, about 30 s).
+- The hot paths take their targets from the copy: the largest account (by messages), its INBOX, Archive (or All Mail) and Sent, the longest thread, the largest HTML body, the top label, and fixed search words (`projet`, `facture`, `meeting`, `github`, a made-up word).
+- The window part keeps the database's own views and signatures. Its 10,000-message sync comes from the loopback IMAP server, as with the fixture. It adds 3 small status accounts (`-status-accounts`), each on its own loopback IMAP server, and runs a `SyncNow` on one of them every 5 s (`-status-every`) during the probes. These rounds find nothing new and stand in for the rounds of accounts that reach their server: each writes the account's status and sends the events the App reloads on. The real accounts' own rounds fail on `127.0.0.1:1` and retry with backoff, as in the fixture.
+- The window part's SQL trace (statement starts, no values) is kept in `results/<label>-<time>-contention-sql.tsv`, and the notes hold a profile: connection time per caller, and per probe (message open, the rest of a mail's calls, view switch, new message) which callers held the connection while it queued.
+- The report holds no mail content, address or subject. Accounts are named `account-<id>`, and backend log lines in errors lose their addresses.
+
+`-status-accounts N` and `-status-every D` also work on the fixture (default 0 there).
+
 ## Traces in the godwit binary
 
 These traces stay in the binary that ships. Each costs one check of a package variable unless its environment variable is set.
@@ -124,5 +146,6 @@ These traces stay in the binary that ships. Each costs one check of a package va
 - `run.go`, `open.go`, `backend.go`, `boot.go`, `platform.go`, `rpctrace.go`, `proc.go`: openings, memory, idle.
 - `cgroup.go`, `contention.go`, `window.go`, `sqltrace.go`: memory pressure, contention, the window during sync, the SQL trace's analysis.
 - `hot.go`, `syncbench.go`, `web.go`, `web/webboot.ts`: the other parts.
+- `realdb.go`, `rounds.go`, `profile.go`: the real-database mode, the status accounts' rounds, the window part's profile.
 - `report.go`: the JSON, the table and the comparison.
 - `run.sh`: build and run on the VPS.

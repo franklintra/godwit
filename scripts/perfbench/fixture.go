@@ -52,6 +52,7 @@ type fixtureMeta struct {
 	Views       []metaView         `json:"views"`
 	TableMB     map[string]float64 `json:"table_mb"` // the largest tables and indexes (dbstat), MB         // the saved views, Franklin's three included
 	Notes       []string           `json:"notes,omitempty"`
+	Real        bool               `json:"real,omitempty"` // a copy of a real database (-db), not generated
 }
 
 type metaView struct {

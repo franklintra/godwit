@@ -238,7 +238,7 @@ func tail(path string, n int) string {
 	if len(keep) > n {
 		keep = keep[len(keep)-n:]
 	}
-	return strings.Join(keep, "\n")
+	return redact(strings.Join(keep, "\n"))
 }
 
 // openOnce starts the build on the fixture's own data dir and stops it once
