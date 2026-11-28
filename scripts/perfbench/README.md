@@ -126,6 +126,14 @@ What the mode does:
 
 `-status-accounts N` and `-status-every D` also work on the fixture (default 0 there).
 
+## The body move (fork rewrites)
+
+The fork moves mail bodies out of `messages` into `message_bodies` (ADR 0053), in the background, after the build's first open of a database that holds them inline. The fixture and the real database both do. So that no part measures the move by accident:
+
+- **premove** (`-premove`, on by default): after each copy's first open, perfbench starts the build again, without the interface, and waits until every fork rewrite is done. It records `premove.time_to_done_s`, `premove.wal_peak_mb` (sampled every 250 ms) and `premove.file_growth_mb` and `_pct` (the main file after the move against the copy before its first open). `-premove=false` measures the copy as the first open left it.
+- **migrate** (only with `-only ...,migrate`): on a copy the build opened once, the build again with no premove; a client opens mail as the window part does (`GetThread`, `ThreadLabels`, `GetMessageLazyImages`, `ImagesAllowed`) and lists the unified inbox, every 200 ms, until the move is done (`migrate.during.*`), then as many times after it (`migrate.after.*`). It records the move as premove does, under `migrate.*`.
+- **killmove** (only with `-only ...,killmove`): on a copy the build never opened, a SHA3 of every message's (id, body_text, body_html) and of the full-text index's shadow tables; then the build is killed (SIGKILL) 30 s into its first start and 30 s into a second; after each kill, `PRAGMA quick_check` and the count of bodies in both places and in neither; then a third start runs the move to its end, and the FTS `integrity-check` and both SHA3 sums must equal the ones before. Each check is a metric `killmove.*` with 1 for a pass. It reads every body twice: about 10 minutes on the real database.
+
 ## Traces in the godwit binary
 
 These traces stay in the binary that ships. Each costs one check of a package variable unless its environment variable is set.
@@ -145,6 +153,7 @@ These traces stay in the binary that ships. Each costs one check of a package va
 - `fixture.go`, `mailgen.go`, `mailserver.go`, `keyring.go`: the fixture.
 - `run.go`, `open.go`, `backend.go`, `boot.go`, `platform.go`, `rpctrace.go`, `proc.go`: openings, memory, idle.
 - `cgroup.go`, `contention.go`, `window.go`, `sqltrace.go`: memory pressure, contention, the window during sync, the SQL trace's analysis.
+- `rewrite.go`: the body move: premove, migrate, killmove.
 - `hot.go`, `syncbench.go`, `web.go`, `web/webboot.ts`: the other parts.
 - `realdb.go`, `rounds.go`, `profile.go`: the real-database mode, the status accounts' rounds, the window part's profile.
 - `report.go`: the JSON, the table and the comparison.

@@ -259,8 +259,9 @@ func (r realDB) targets(ctx context.Context, dbPath string, meta *fixtureMeta) e
 	if rs, err := q("SELECT thread_id, count(*) FROM messages GROUP BY thread_id ORDER BY 2 DESC LIMIT 1"); err == nil && len(rs) > 0 {
 		meta.BigThread, meta.BigThreadN = store.Int(rs[0][0]), int(store.Int(rs[0][1]))
 	}
-	meta.BigMessage = one("SELECT id FROM messages ORDER BY length(body_html) DESC LIMIT 1")
-	meta.TypMessage = one("SELECT id FROM messages WHERE body_html IS NOT NULL ORDER BY abs(length(body_html) - 6000), id LIMIT 1")
+	html := store.BodyHTMLSQL("m") // the body wherever it is stored (ADR 0053)
+	meta.BigMessage = one("SELECT m.id FROM messages m ORDER BY length(" + html + ") DESC LIMIT 1")
+	meta.TypMessage = one("SELECT m.id FROM messages m WHERE " + html + " IS NOT NULL ORDER BY abs(length(" + html + ") - 6000), m.id LIMIT 1")
 	meta.TopLabel = one("SELECT label_id FROM message_labels WHERE active = 1 GROUP BY label_id ORDER BY count(*) DESC LIMIT 1")
 	meta.SearchTerms = realSearchTerms
 	meta.TableMB = map[string]float64{}

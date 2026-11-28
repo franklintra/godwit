@@ -438,8 +438,9 @@ func finishDB(ctx context.Context, path string, meta *fixtureMeta) error {
 	if r, err := q("SELECT thread_id, count(*) FROM messages GROUP BY thread_id ORDER BY 2 DESC LIMIT 1"); err == nil && len(r) > 0 {
 		meta.BigThread, meta.BigThreadN = store.Int(r[0][0]), int(store.Int(r[0][1]))
 	}
-	meta.BigMessage = one("SELECT id FROM messages ORDER BY length(body_html) DESC LIMIT 1")
-	meta.TypMessage = one("SELECT id FROM messages WHERE body_html IS NOT NULL ORDER BY abs(length(body_html) - 6000), id LIMIT 1")
+	html := store.BodyHTMLSQL("m") // the body wherever it is stored (ADR 0053)
+	meta.BigMessage = one("SELECT m.id FROM messages m ORDER BY length(" + html + ") DESC LIMIT 1")
+	meta.TypMessage = one("SELECT m.id FROM messages m WHERE " + html + " IS NOT NULL ORDER BY abs(length(" + html + ") - 6000), m.id LIMIT 1")
 	meta.TopLabel = one("SELECT label_id FROM message_labels WHERE active = 1 GROUP BY label_id ORDER BY count(*) DESC LIMIT 1")
 	// a common word, a made-up one, a surname, a subject phrase, an address part
 	meta.SearchTerms = []string{"projet", words[len(words)-7], "Martin", "Flight to Lisbon", "github"}
@@ -450,9 +451,9 @@ func finishDB(ctx context.Context, path string, meta *fixtureMeta) error {
 		}
 	} else {
 		meta.Notes = append(meta.Notes, "dbstat: "+err.Error())
-		if r, err := q("SELECT sum(length(body_html)), sum(length(body_text)), sum(length(snippet)) FROM messages"); err == nil && len(r) > 0 {
-			meta.TableMB["messages.body_html (bytes)"] = float64(store.Int(r[0][0])) / 1e6
-			meta.TableMB["messages.body_text (bytes)"] = float64(store.Int(r[0][1])) / 1e6
+		if r, err := q("SELECT sum(length(" + html + ")), sum(length(" + store.BodyTextSQL("m") + ")), sum(length(snippet)) FROM messages m"); err == nil && len(r) > 0 {
+			meta.TableMB["bodies.html (bytes)"] = float64(store.Int(r[0][0])) / 1e6
+			meta.TableMB["bodies.text (bytes)"] = float64(store.Int(r[0][1])) / 1e6
 		}
 	}
 	if _, err := db.Query(ctx, "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {

@@ -28,11 +28,14 @@ type runConfig struct {
 	pressure, winViews                              string
 	idle, statusEvery                               time.Duration
 	statusAccounts                                  int
-	quick                                           bool
+	quick, premove                                  bool
 	only                                            map[string]bool
 }
 
 func (c runConfig) want(part string) bool { return len(c.only) == 0 || c.only[part] }
+
+// named is true for a part that runs only when -only names it.
+func (c runConfig) named(part string) bool { return c.only[part] }
 
 func cmdRun(ctx context.Context, args []string) error {
 	fl := flag.NewFlagSet("run", flag.ExitOnError)
@@ -49,7 +52,8 @@ func cmdRun(ctx context.Context, args []string) error {
 	quick := fl.Bool("quick", false, "fewer runs and shorter windows")
 	runs := fl.Int("runs", 0, "opening runs, cold and warm each (default 5, quick 3)")
 	idle := fl.Duration("idle", 0, "idle window (default 60s, quick 15s)")
-	only := fl.String("only", "", "comma list of parts: open,mem,hot,idle,pressure,contention,window,sync,web (default all; contention includes window)")
+	only := fl.String("only", "", "comma list of parts: open,mem,hot,idle,pressure,contention,window,sync,web (default all; contention includes window); migrate and killmove run only when named")
+	fl.BoolVar(&c.premove, "premove", true, "after each copy's first open, run the build until its fork rewrites are done (the body move) before the parts measure it, and record the move as premove.*")
 	winRounds := fl.Int("window-rounds", 0, "probe rounds of the window part, while its sync writes (default 8, quick 4)")
 	fl.StringVar(&c.winViews, "window-views", "franklin", "saved views the window part keeps: franklin (only the reply-based one, as his database) or fixture (all four)")
 	mem := fl.String("mem", "350M", "memory.max of the pressured backend, page cache included")
@@ -154,45 +158,65 @@ func run(ctx context.Context, c runConfig) error {
 	// scratch (gone first): each part that writes starts from the same
 	// bytes, with a fresh WAL. The copy's first open runs in g when it is
 	// not nil.
-	fresh := func(g *pressureGroup) (*opener, error) {
+	// copyOnly copies the fixture (or the real database: realDB.fresh) into
+	// scratch (gone first): each part that writes starts from the same
+	// bytes, with a fresh WAL. It returns the copy's opener and its size.
+	copyOnly := func() (*opener, int64, error) {
 		os.RemoveAll(scratch)
 		t0 := time.Now()
 		if rdb != nil {
 			m, err := rdb.fresh(scratch)
 			if err != nil {
-				return nil, fmt.Errorf("copy the database: %w", err)
+				return nil, 0, fmt.Errorf("copy the database: %w", err)
 			}
 			if !targets {
 				meta = m
 			}
 		} else {
 			if err := copyFixture(fxDir, scratch); err != nil {
-				return nil, fmt.Errorf("copy fixture: %w", err)
+				return nil, 0, fmt.Errorf("copy fixture: %w", err)
 			}
 			log.Printf("copied the fixture in %s", time.Since(t0).Round(time.Millisecond))
 		}
 		o := &opener{bin: c.bin, data: filepath.Join(scratch, meta.DataDir), settle: 1500 * time.Millisecond,
 			env: backendEnv(scratch, filepath.Join(scratch, meta.KeyringFile), filepath.Join(scratch, meta.KeyringKey))}
+		return o, fileSize(filepath.Join(o.data, "godwit.db")), nil
+	}
+	// fresh is copyOnly, then the build's first open of the copy (in g
+	// when g is not nil), then, with -premove and move true, the build
+	// again until its fork rewrites are done.
+	fresh := func(g *pressureGroup, move bool) (*opener, int64, error) {
+		o, before, err := copyOnly()
+		if err != nil {
+			return nil, 0, err
+		}
 		// the build's first open of this copy, not an opening: what it does
 		// once (a fork step, a new migration) is recorded apart, as open.first
 		o.group = g
 		r, _, _, err := o.open(ctx, false, false)
 		o.group = nil
 		if err != nil {
-			return nil, fmt.Errorf("first open: %w", err)
+			return nil, 0, fmt.Errorf("first open: %w", err)
 		}
 		prefix := "open.first"
 		if g != nil {
 			prefix = "pressured.open.first"
 		}
 		r.recordFirst(rep, prefix)
+		if move && c.premove {
+			o.group = g
+			if err := premove(ctx, o, before, rep, "premove"); err != nil {
+				return nil, 0, err
+			}
+			o.group = nil
+		}
 		if rdb != nil && !targets {
 			if err := rdb.targets(ctx, filepath.Join(o.data, "godwit.db"), &meta); err != nil {
-				return nil, fmt.Errorf("targets: %w", err)
+				return nil, 0, fmt.Errorf("targets: %w", err)
 			}
 			rep.Fixture, targets = meta, true
 		}
-		return o, nil
+		return o, before, nil
 	}
 	var group *pressureGroup
 	if c.pressure == "on" {
@@ -207,7 +231,7 @@ func run(ctx context.Context, c runConfig) error {
 		if !unpressured {
 			first = group
 		}
-		o, err := fresh(first)
+		o, _, err := fresh(first, true)
 		if err != nil {
 			return err
 		}
@@ -258,7 +282,7 @@ func run(ctx context.Context, c runConfig) error {
 				prefix = "pressured.contention"
 			}
 			if c.want("contention") {
-				o, err := fresh(nil)
+				o, _, err := fresh(nil, true)
 				if err != nil {
 					return err
 				}
@@ -268,7 +292,7 @@ func run(ctx context.Context, c runConfig) error {
 				}
 			}
 			// the window part on its own copy: its sync starts fresh
-			o, err := fresh(nil)
+			o, _, err := fresh(nil, true)
 			if err != nil {
 				return err
 			}
@@ -280,6 +304,24 @@ func run(ctx context.Context, c runConfig) error {
 			if err := runWindow(ctx, o, mail, meta, wo, prefix+".window", rep); err != nil {
 				return fmt.Errorf("%s.window: %w", prefix, err)
 			}
+		}
+	}
+	if c.named("migrate") { // on a copy the build opened once: the move is under way
+		o, before, err := fresh(nil, false)
+		if err != nil {
+			return err
+		}
+		if err := runMigrate(ctx, o, before, rep); err != nil {
+			return fmt.Errorf("migrate: %w", err)
+		}
+	}
+	if c.named("killmove") { // on a copy the build never opened
+		o, _, err := copyOnly()
+		if err != nil {
+			return err
+		}
+		if err := runKillMove(ctx, o, []time.Duration{30 * time.Second, 30 * time.Second}, rep); err != nil {
+			return fmt.Errorf("killmove: %w", err)
 		}
 	}
 	os.RemoveAll(scratch)
