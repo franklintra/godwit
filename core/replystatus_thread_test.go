@@ -483,3 +483,21 @@ func TestThreadReplyStatusPlan(t *testing.T) {
 	assert.Contains(t, plan, "messages_thread")
 	assert.NotRegexp(t, regexp.MustCompile(`(?m)^SCAN (m|t)\b`), plan)
 }
+
+// The views' read of every recent conversation walks threads_last_date, then
+// each one's mail by messages_thread: never a scan of the message rows, which
+// reads the whole table (the page cache does not hold it on a large store).
+func TestReplyStatusesPlan(t *testing.T) {
+	mb := newReplyMailbox(t, 1)
+	rows, err := mb.s.db.Query(bg, "EXPLAIN QUERY PLAN "+logicalMailsSQL("t.last_date >= ?"), 0)
+	require.NoError(t, err)
+	var lines []string
+	for _, r := range rows.Values {
+		lines = append(lines, store.Str(r[len(r)-1]))
+	}
+	plan := strings.Join(lines, "\n")
+	t.Logf("plan:\n%s", plan)
+	assert.Contains(t, plan, "threads_last_date")
+	assert.Contains(t, plan, "messages_thread")
+	assert.NotRegexp(t, regexp.MustCompile(`(?m)^SCAN m\b`), plan)
+}

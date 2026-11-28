@@ -65,6 +65,10 @@ const (
 	// 13 s of each minute. At 20 s they take about 4 %, and a badge lags
 	// the mail it counts by 20 s at most, during a sync only.
 	countsEvery = 20 * time.Second
+	// writeCountsEvery is how often mail written here (mark read, move)
+	// rereads the counts: the first write at once, the others of a run
+	// together once it has passed.
+	writeCountsEvery = 5 * time.Second
 )
 
 func (a *App) page() pageView { return a.pages[a.route.Page] }
@@ -169,6 +173,8 @@ func (a *App) onEvent(ev events.Event) {
 		a.syncing[ev.AccountID] = true
 		return
 	case events.SyncFinished:
+		_, failed := a.syncErr[ev.AccountID]
+		waiting := a.mail.older.notYet != 0
 		delete(a.syncing, ev.AccountID)
 		delete(a.syncErr, ev.AccountID)
 		now := a.clock.Now()
@@ -178,6 +184,15 @@ func (a *App) onEvent(ev events.Event) {
 		a.syncedAtBy[ev.AccountID] = now
 		a.mail.older.notYet = 0
 		a.tick()
+		if !failed && !waiting && a.countsLaterFor(ev.AccountID) {
+			// A round's mail changes come as their own events. What only its
+			// end can change (the accounts, a new folder) waits for the
+			// counts' next read: a worker's round ends every few seconds
+			// across accounts, and each full refresh read the views.
+			a.countsOwed = true
+			a.trailCounts(countsEvery)
+			return
+		}
 	case events.SyncFailed:
 		delete(a.syncing, ev.AccountID)
 		f := a.syncErr[ev.AccountID]
@@ -232,7 +247,7 @@ func (a *App) refresh(dirty []events.Event) {
 	}
 	if a.countsLater(dirty) {
 		a.countsOwed = true
-		a.trailCounts()
+		a.trailCounts(countsEvery)
 		if a.route.Page == PageMail {
 			a.mail.refreshList()
 		} else {
@@ -250,15 +265,25 @@ func (a *App) refresh(dirty []events.Event) {
 // the counts were read less than countsEvery ago, and no mail written here
 // has landed since.
 func (a *App) countsLater(dirty []events.Event) bool {
-	if a.countsNow || !a.loaded || a.countsAt.IsZero() || len(dirty) == 0 || a.clock.Now().Sub(a.countsAt) >= countsEvery {
+	if len(dirty) == 0 {
 		return false
 	}
 	return !slices.ContainsFunc(dirty, func(ev events.Event) bool {
 		if ev.Type != events.MessagesChanged && ev.Type != events.MessageReceived {
 			return true
 		}
-		return ev.AccountID != 0 && !slices.ContainsFunc(a.accounts, func(acc core.Account) bool { return acc.ID == ev.AccountID })
+		return !a.countsLaterFor(ev.AccountID)
 	})
+}
+
+// countsLaterFor is countsLater for one event of account id (0: none):
+// the App knows it, the counts were read less than countsEvery ago, and no
+// mail written here has landed since.
+func (a *App) countsLaterFor(id int64) bool {
+	if a.countsNow || !a.loaded || a.countsAt.IsZero() || a.clock.Now().Sub(a.countsAt) >= countsEvery {
+		return false
+	}
+	return id == 0 || slices.ContainsFunc(a.accounts, func(acc core.Account) bool { return acc.ID == id })
 }
 
 // countsRead notes a refresh that reads the counts: the trailing one is no
@@ -271,13 +296,19 @@ func (a *App) countsRead() {
 	}
 }
 
-// trailCounts reads the counts a refresh left once countsEvery has passed
-// since they were last read, so the last of a burst's changes shows.
-func (a *App) trailCounts() {
+// trailCounts reads the counts a refresh left once every has passed since
+// they were last read, so the last of a burst's changes shows. A trailing
+// read already due sooner stays; a later one moves to this time.
+func (a *App) trailCounts(every time.Duration) {
+	at := a.countsAt.Add(every)
 	if a.countsTimer != nil {
-		return
+		if !at.Before(a.countsTimerAt) {
+			return
+		}
+		a.countsTimer()
 	}
-	a.countsTimer = a.after(a.countsAt.Add(countsEvery).Sub(a.clock.Now()), func() {
+	a.countsTimerAt = at
+	a.countsTimer = a.after(at.Sub(a.clock.Now()), func() {
 		a.countsTimer = nil
 		if a.countsOwed {
 			a.countsNow = true
@@ -288,10 +319,18 @@ func (a *App) trailCounts() {
 
 // mailWritten follows a write of mail made here (mark read, move, delete,
 // archive): the counts are read at the next refresh, which comes at once,
-// whether or not the write's own event has refreshed already.
+// whether or not the write's own event has refreshed already. Within
+// writeCountsEvery of their last read they wait until it has passed, so a
+// run of writes (opening mail after mail marks each read) reads them once
+// per writeCountsEvery, not once per write.
 func (a *App) mailWritten() {
-	a.countsNow = true
-	a.refreshSoon()
+	if a.countsAt.IsZero() || a.clock.Now().Sub(a.countsAt) >= writeCountsEvery {
+		a.countsNow = true
+		a.refreshSoon()
+		return
+	}
+	a.countsOwed = true
+	a.trailCounts(writeCountsEvery)
 }
 
 // tick redraws once a minute, so the sync age stays current.

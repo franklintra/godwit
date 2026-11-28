@@ -127,7 +127,8 @@ func TestCountsEveryDuringLongBurst(t *testing.T) {
 	}
 }
 
-// Mail written here (a mark read) reads the counts at once, in a burst too.
+// Mail written here (a mark read) reads the counts at once, in a burst too,
+// when they are older than writeCountsEvery.
 func TestCountsAtOnceAfterMailWrite(t *testing.T) {
 	h, svc, acc := countsHarness(t)
 	ids := inboxIDs(t, h, acc)
@@ -135,6 +136,7 @@ func TestCountsAtOnceAfterMailWrite(t *testing.T) {
 	if !h.app.countsOwed {
 		t.Fatal("the counts did not wait")
 	}
+	h.advance(writeCountsEvery)
 	before, start := svc.reads(), h.app.clock.Now()
 	landed := false
 	h.app.writes.Chain(fmt.Sprintf("account:%d", acc.ID), func(ctx context.Context) error {
@@ -151,6 +153,86 @@ func TestCountsAtOnceAfterMailWrite(t *testing.T) {
 	}
 	if h.app.unread[acc.ID] != 0 || h.app.countsOwed {
 		t.Fatalf("unread %v, owed %v", h.app.unread, h.app.countsOwed)
+	}
+}
+
+// writeMail runs a mark read of ids through the App's write queue, as the
+// reader does when it opens a mail, and waits until it has landed.
+func writeMail(h *harness, acc core.Account, ids []int64) {
+	h.t.Helper()
+	landed := false
+	h.app.writes.Chain(fmt.Sprintf("account:%d", acc.ID), func(ctx context.Context) error {
+		return h.app.svc.SetFlags(ctx, ids, []string{`\Seen`}, nil)
+	}, func(error) { landed = true })
+	h.until("the write", func() bool { return landed })
+}
+
+// Opening mail after mail writes each one's \Seen: the counts (and the
+// views with them) are read once per writeCountsEvery, not once per write,
+// and the last write's change shows.
+func TestCountsOncePerRunOfWrites(t *testing.T) {
+	h, svc, acc := countsHarness(t)
+	ids := inboxIDs(t, h, acc)
+	before := svc.reads()
+	for i := range 4 { // four opens, a second apart
+		writeMail(h, acc, ids[i%len(ids):i%len(ids)+1])
+		h.advance(time.Second)
+		h.until("the refresh read", func() bool { return idle(h) })
+	}
+	if got := svc.reads().since(before); got.saved != 0 || got.starred != 0 || got.accounts != 0 {
+		t.Fatalf("writes within %v of the last read read the counts: %+v", writeCountsEvery, got)
+	}
+	if !h.app.countsOwed || h.app.countsTimer == nil {
+		t.Fatalf("owed %v, timer %v", h.app.countsOwed, h.app.countsTimer != nil)
+	}
+	h.advance(writeCountsEvery)
+	h.until("the trailing refresh read", func() bool { return idle(h) && !h.app.countsOwed })
+	got := svc.reads().since(before)
+	if got.saved != 1 || got.starred != 1 || got.accounts != 1 {
+		t.Fatalf("a run of four writes read %+v, want the counts once", got)
+	}
+	if h.app.unread[acc.ID] != 0 {
+		t.Fatalf("unread %v after the run", h.app.unread)
+	}
+}
+
+// A worker's round ends with SyncFinished, every few seconds across
+// accounts. Its mail changes come as their own events, so the round's end
+// reads neither the list nor the counts at once: the counts are read once
+// per countsEvery while rounds keep ending.
+func TestSyncRoundsReadCountsEvery(t *testing.T) {
+	h, svc, acc := countsHarness(t)
+	before := svc.reads()
+	for range 12 { // a minute of rounds, one every 5 s
+		h.app.onEvent(events.Event{Type: events.SyncFinished, AccountID: acc.ID})
+		h.advance(5 * time.Second)
+		h.until("the refresh read", func() bool { return idle(h) })
+	}
+	got := svc.reads().since(before)
+	if got.saved < 2 || got.saved > 3 || got.accounts != got.saved || got.starred != got.saved {
+		t.Fatalf("a minute of rounds read %+v, want the counts every %v", got, countsEvery)
+	}
+	if got.list > got.saved {
+		t.Fatalf("a minute of rounds read the list %d times, the counts %d", got.list, got.saved)
+	}
+	if h.app.syncedAtBy[acc.ID].IsZero() {
+		t.Fatal("the sync status missed the rounds")
+	}
+}
+
+// A round that ends a run of failures refreshes at once: the account's
+// status shows the error until the accounts are read again.
+func TestSyncFinishedAfterFailureReadsAtOnce(t *testing.T) {
+	h, svc, acc := countsHarness(t)
+	h.app.onEvent(events.Event{Type: events.SyncFailed, AccountID: acc.ID, Error: "dial tcp: connection refused", Kind: "connect"})
+	h.advance(refreshEvery)
+	h.until("the refresh read", func() bool { return idle(h) })
+	before := svc.reads()
+	h.app.onEvent(events.Event{Type: events.SyncFinished, AccountID: acc.ID})
+	h.advance(refreshEvery)
+	h.until("the refresh read", func() bool { return idle(h) })
+	if got := svc.reads().since(before); got.accounts != 1 {
+		t.Fatalf("the round after a failure read %+v, want the accounts at once", got)
 	}
 }
 
