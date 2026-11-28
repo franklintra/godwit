@@ -44,11 +44,18 @@ type contactsPage struct {
 
 	avatars    map[string]*contactAvatar // by primary address and newest message, as avatarPolicySavedVer was
 	avatarsVer uint64
+	avatarWant []avatarAsk // asked by the rows drawn since the last ContactAvatars call
 }
 
 // contactAvatar is a contact's sender avatar once read; nil while it is read,
 // or when there is none.
 type contactAvatar struct{ img ui.ImageSource }
+
+// avatarAsk is a contact's avatar asked for: its address, and where it lands.
+type avatarAsk struct {
+	addr string
+	av   *contactAvatar
+}
 
 func contactAddrs(c core.Contact) []core.ContactAddress {
 	if len(c.Addresses) > 0 {
@@ -876,19 +883,45 @@ func (p *contactsPage) avatar(ct core.Contact) ui.ImageSource {
 	}
 	av := &contactAvatar{}
 	p.avatars[key] = av
-	var img ui.ImageSource
+	if len(p.avatarWant) == 0 {
+		a.onUI(p.loadAvatars) // once the frame is drawn, with the other rows' contacts
+	}
+	p.avatarWant = append(p.avatarWant, avatarAsk{addr, av})
+	return nil
+}
+
+// loadAvatars reads the avatars the rows drawn asked for in one
+// ContactAvatars call, after the frame that drew them.
+func (p *contactsPage) loadAvatars() {
+	a, asks := p.a, p.avatarWant
+	p.avatarWant = nil
+	if len(asks) == 0 {
+		return
+	}
+	addrs := make([]string, len(asks))
+	for i, ask := range asks {
+		addrs[i] = ask.addr
+	}
+	imgs := make([]ui.ImageSource, len(asks))
 	a.do(func(ctx context.Context) error {
-		got, err := a.svc.ContactAvatar(ctx, addr)
-		if err != nil || len(got.Data) == 0 {
+		got, err := a.svc.ContactAvatars(ctx, addrs)
+		if err != nil {
 			return err
 		}
-		img, err = avatarImage(got)
-		return err
+		for i, av := range got {
+			if i < len(imgs) && len(av.Data) > 0 {
+				imgs[i], _ = avatarImage(av)
+			}
+		}
+		return nil
 	}, func(error) {
 		// shortcut: a failed read leaves the initial until the setting changes; retry if users miss avatars.
-		av.img = img
+		for i, ask := range asks {
+			if imgs[i] != nil {
+				ask.av.img = imgs[i]
+			}
+		}
 	})
-	return nil
 }
 
 // bigAvatar is the detail's avatar: ct's image, else their initial, 72 px.

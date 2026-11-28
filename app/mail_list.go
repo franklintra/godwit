@@ -184,6 +184,9 @@ type mailPage struct {
 	fetched    func()                                                                                          // tests: runs off the UI thread once a reload has read the list
 	avatars    map[string]*listAvatar                                                                          // cached sender avatars for list rows, by normalized address
 	avatarsVer uint64                                                                                          // matches a.avatarPolicySavedVer
+	// avatarWant are the addresses the rows drawn asked for since the last
+	// ContactAvatars call: one call after the frame reads them all.
+	avatarWant []string
 }
 
 // listAvatar is a sender's avatar once read for the mail list; img is nil
@@ -1772,17 +1775,17 @@ func (p *mailPage) addrAvatar(raw string, msgID int64) ui.ImageSource {
 	}
 	av := &listAvatar{}
 	p.avatars[addr] = av
+	if msgID == 0 {
+		// Asked once the frame is drawn, with the other rows' senders.
+		if len(p.avatarWant) == 0 {
+			a.onUI(p.loadAvatars)
+		}
+		p.avatarWant = append(p.avatarWant, addr)
+		return nil
+	}
 	var img ui.ImageSource
 	a.do(func(ctx context.Context) error {
-		var (
-			got core.Avatar
-			err error
-		)
-		if msgID != 0 {
-			got, err = a.svc.SenderAvatar(ctx, msgID, false)
-		} else {
-			got, err = a.svc.ContactAvatar(ctx, addr)
-		}
+		got, err := a.svc.SenderAvatar(ctx, msgID, false)
 		if err != nil || len(got.Data) == 0 {
 			return err
 		}
@@ -1792,6 +1795,40 @@ func (p *mailPage) addrAvatar(raw string, msgID int64) ui.ImageSource {
 		av.img = img
 	})
 	return nil
+}
+
+// loadAvatars reads the avatars the rows drawn asked for (avatarWant) in one
+// ContactAvatars call, after the frame that drew them. Each lands in the
+// entry its row made, unless the avatars were forgotten meanwhile.
+func (p *mailPage) loadAvatars() {
+	a, addrs := p.a, p.avatarWant
+	p.avatarWant = nil
+	if len(addrs) == 0 {
+		return
+	}
+	want := make([]*listAvatar, len(addrs))
+	for i, addr := range addrs {
+		want[i] = p.avatars[addr]
+	}
+	imgs := make([]ui.ImageSource, len(addrs))
+	a.do(func(ctx context.Context) error {
+		got, err := a.svc.ContactAvatars(ctx, addrs)
+		if err != nil {
+			return err
+		}
+		for i, av := range got {
+			if i < len(imgs) && len(av.Data) > 0 {
+				imgs[i], _ = avatarImage(av) // one that fails to decode leaves its initial
+			}
+		}
+		return nil
+	}, func(error) {
+		for i, av := range want {
+			if av != nil && imgs[i] != nil {
+				av.img = imgs[i]
+			}
+		}
+	})
 }
 
 // withAvatar lays out lines in a column beside who's avatar: a row's body, the
