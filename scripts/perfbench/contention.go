@@ -88,9 +88,16 @@ func runContention(ctx context.Context, o *opener, mail *loopMail, nmsg, boots i
 		}()
 		return nil
 	}
-	if err := loop("perfbench-tray", time.Second, func(c *uiclient.Client) { trayRound(ctx, c) }); err != nil {
+	tray, _, err := b.dialUI(ctx, time.Minute, nil, "perfbench-tray")
+	if err != nil {
 		return err
 	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defer tray.Close()
+		runTray(ctx, tray, stop)
+	}()
 	if err := loop("perfbench-probe", 250*time.Millisecond, func(c *uiclient.Client) {
 		t := time.Now()
 		if _, err := c.ListAccounts(ctx); err == nil {

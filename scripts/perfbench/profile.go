@@ -120,8 +120,8 @@ func profileNotes(prefix string, calls []sqlCall, from, to time.Time, top int) [
 		name    string
 		methods []string
 	}{
-		{"message open (GetThread, ThreadLabels, GetMessageLazyImages, ImagesAllowed)", []string{"GetThread", "ThreadLabels", "GetMessageLazyImages", "ImagesAllowed"}},
-		{"the rest of a mail's calls (ThreadDeadline, cards, avatar, unsubscribe...)", []string{"ThreadDeadline", "PluginCards", "ThreadTags", "SetFlags", "ContactAvatar", "UnsubscribeMethod"}},
+		{"message open (OpenThread; before it GetThread, ThreadLabels, GetMessageLazyImages, ImagesAllowed)", []string{"OpenThread", "GetThread", "ThreadLabels", "GetMessageLazyImages", "ImagesAllowed"}},
+		{"the rest of a mail's calls (ThreadDeadline, cards, avatar, unsubscribe...)", []string{"ThreadDeadline", "PluginCards", "PluginTags", "SetFlags", "SenderAvatar", "ContactAvatar", "ContactAvatars", "UnsubscribeMethod"}},
 		{"view switch (ListThreads, ViewContents)", []string{"ListThreads", "ViewContents"}},
 		{"new message (NewDraft, compose Load)", []string{"NewDraft", "GetDraft", "ListAccounts", "ListIdentities", "GetSettings", "GetSignature"}},
 	} {

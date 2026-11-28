@@ -59,13 +59,14 @@ const (
 // writes, and he switches views, opens a new message and scrolls past
 // senders' avatars, and scrolls through his mail. A new account's initial
 // sync writes (the loopback IMAP folder), the App stays attached and
-// reloads on every mail event as the main window does, the tray's loads
-// repeat, and between short pauses a user connection does what the window
+// reloads on every mail event as the main window does, the tray reads on
+// mail events (runTray), and between short pauses a user connection does what the window
 // asks on a click: ListThreads of the unified inbox, the largest INBOX and
 // starred, ViewContents of the reply-based view; NewDraft then the compose
-// page's Load (webui, as the compose window calls it); ContactAvatar for a
-// dozen list senders at once; then it opens scrollN consecutive mails of
-// the unified inbox (openMail: the reader's calls, in its order). The
+// page's Load (webui, as the compose window calls it); ContactAvatars for a
+// dozen list senders in one call; then it opens scrollN consecutive mails of
+// the unified inbox (openMail: the reader's calls, in its order, with its
+// prefetch of the rows beside the one shown). The
 // first round also runs the palette's Find with nothing typed (it was
 // beside NewDraft in the real trace; its contacts scan is the one a
 // recipient completion runs). Rounds stop when the sync ends. The SQL
@@ -127,6 +128,8 @@ func runWindow(ctx context.Context, o *opener, mail *loopMail, meta fixtureMeta,
 		return err
 	}
 	defer user.Close()
+	pf := newPrefetcher(user) // the reader's prefetch, dropped by the events the user's interface gets
+	pf.follow(ctx)
 	senders, err := listSenders(ctx, user, 12)
 	if err != nil {
 		d.close()
@@ -191,14 +194,7 @@ func runWindow(ctx context.Context, o *opener, mail *loopMail, meta fixtureMeta,
 	go func() {
 		defer wg.Done()
 		defer tray.Close()
-		for {
-			trayRound(ctx, tray)
-			select {
-			case <-stop:
-				return
-			case <-time.After(time.Second):
-			}
-		}
+		runTray(ctx, tray, stop)
 	}()
 	end := func() {
 		close(stop)
@@ -309,27 +305,12 @@ func runWindow(ctx context.Context, o *opener, mail *loopMail, meta fixtureMeta,
 		comp.Release(win) // the window closes: an empty draft goes
 		pause()
 
-		// avatars: the list's rows ask for their senders' at once
-		var avMu sync.Mutex
-		if err := timed("avatars", "avatars", fmt.Sprintf("during sync: ContactAvatar for %d list senders at once, until the last answers", len(senders)), func() error {
-			var g sync.WaitGroup
-			var first error
-			for _, s := range senders {
-				g.Add(1)
-				go func() {
-					defer g.Done()
-					t := time.Now()
-					_, err := user.ContactAvatar(ctx, s)
-					avMu.Lock()
-					defer avMu.Unlock()
-					if err != nil && first == nil {
-						first = err
-					}
-					rep.add(prefix+".avatar_call_ms", "ms", "lower", "during sync: one ContactAvatar call among them", ms(time.Since(t)))
-				}()
-			}
-			g.Wait()
-			return first
+		// avatars: the list asks for its rows' senders in one call after it paints
+		if err := timed("avatars", "avatars", fmt.Sprintf("during sync: ContactAvatars for %d list senders, until it answers", len(senders)), func() error {
+			t := time.Now()
+			_, err := user.ContactAvatars(ctx, senders)
+			rep.add(prefix+".avatar_call_ms", "ms", "lower", "during sync: the ContactAvatars call", ms(time.Since(t)))
+			return err
 		}); err != nil {
 			end()
 			return err
@@ -343,9 +324,9 @@ func runWindow(ctx context.Context, o *opener, mail *loopMail, meta fixtureMeta,
 		var trail sync.WaitGroup
 		var opened []mailOpen
 		var openMu sync.Mutex
-		for _, tid := range scroll[r*scrollN : (r+1)*scrollN] {
+		for j, tid := range scroll[r*scrollN : (r+1)*scrollN] {
 			trail.Add(1)
-			th, shown, err := openMail(ctx, user, tid, func(m mailOpen) {
+			th, shown, err := openMail(ctx, user, pf, tid, func(m mailOpen) {
 				openMu.Lock()
 				opened = append(opened, m)
 				openMu.Unlock()
@@ -357,8 +338,18 @@ func runWindow(ctx context.Context, o *opener, mail *loopMail, meta fixtureMeta,
 				end()
 				return fmt.Errorf("open thread %d: %w", tid, err)
 			}
-			rep.add(prefix+".open.thread_ms", "ms", "lower", "during sync, scrolling: selection to the thread read (GetThread, ThreadLabels)", ms(th))
-			rep.add(prefix+".message_open_ms", "ms", "lower", "during sync, scrolling: selection to the newest message's body read, when the reader switches (GetThread, ThreadLabels, then GetMessageLazyImages, ImagesAllowed)", ms(shown))
+			rep.add(prefix+".open.thread_ms", "ms", "lower", "during sync, scrolling: selection to the thread read (OpenThread, or a prefetched open)", ms(th))
+			rep.add(prefix+".message_open_ms", "ms", "lower", "during sync, scrolling: selection to the newest message's body read, when the reader switches (OpenThread, or none for a prefetched open)", ms(shown))
+			// shown: the reader reads the opens of the rows beside it
+			i := r*scrollN + j
+			var near []int64
+			if i+1 < len(scroll) {
+				near = append(near, scroll[i+1])
+			}
+			if i > 0 {
+				near = append(near, scroll[i-1])
+			}
+			pf.want(ctx, near...)
 			time.Sleep(scrollDwell)
 		}
 		trail.Wait()
@@ -366,6 +357,15 @@ func runWindow(ctx context.Context, o *opener, mail *loopMail, meta fixtureMeta,
 		spans = append(spans, probeSpan{"scroll", sFrom, sTo})
 		rep.add(prefix+".scroll_ms", "ms", "lower", fmt.Sprintf("during sync: %d consecutive mails opened, %s each once shown, until the last call of the last answered", scrollN, scrollDwell), ms(sTo.Sub(sFrom)))
 		failed := map[string]int{}
+		hits := 0
+		for _, m := range opened {
+			if m.prefetched {
+				hits++
+			}
+		}
+		if len(opened) > 0 {
+			rep.add(prefix+".open.prefetched_pct", "%", "higher", "during sync, scrolling: share of the mails shown from a prefetched open", 100*float64(hits)/float64(len(opened)))
+		}
 		for _, m := range opened {
 			rep.add(prefix+".open.all_ms", "ms", "lower", "during sync, scrolling: selection to the last of the mail's calls answered (deadline, cards, avatar, unsubscribe, OpenPGP...)", ms(m.all))
 			rep.add(prefix+".open.thread_deadline_ms", "ms", "lower", "during sync, scrolling: the mail's ThreadDeadline (loadWhy: reply statuses of the whole mailbox)", ms(m.deadline))
@@ -481,16 +481,6 @@ func keepFile(src, dst string) error {
 		return err
 	}
 	return copyFile(src, dst)
-}
-
-// trayRound is one of the menu-bar tray's loads (its readSnapshot).
-func trayRound(ctx context.Context, c *uiclient.Client) {
-	c.GetSettings(ctx)
-	accs, _ := c.ListAccounts(ctx)
-	for _, a := range accs {
-		c.ListFolders(ctx, a.ID)
-	}
-	c.RecentSignInCodes(ctx, time.Now())
 }
 
 // shapeForWindow makes the run's copy look like Franklin's database where
@@ -689,121 +679,3 @@ func listThreadIDs(ctx context.Context, c *uiclient.Client, n int) ([]int64, err
 	return out[:n], nil
 }
 
-// mailOpen is what one opened mail cost, once every call it made answered.
-type mailOpen struct {
-	all, deadline time.Duration // selection to the last answer; its ThreadDeadline alone
-	failed        []string      // the background calls that failed
-}
-
-// openMail asks what the reader asks when a row is selected
-// (app/reader.go), in its order and with its concurrency: load reads the
-// thread (GetThread, ThreadLabels); once read, expand(newest) starts its
-// plugin cards and tags and loadBody (GetMessageLazyImages, then
-// ImagesAllowed), markRead flags the unread \Seen (SetFlags), startAI reads
-// the skill menu (ListSkills, ListActions) and loadWhy the reply deadline
-// (ThreadDeadline; ViewWhy only in a saved view); once the body is read,
-// loadAvatar (ImagesAllowed, ListAddressBooks, SenderAvatar),
-// loadUnsubscribe and loadOpenPGP. It returns when the body is read, as
-// the reader switches then; the rest goes on, and done gets its times once
-// all answered. Models are off in the fixture: no summary, gist or quick
-// replies.
-func openMail(ctx context.Context, c *uiclient.Client, tid int64, done func(mailOpen)) (thread, shown time.Duration, err error) {
-	t0 := time.Now()
-	th, err := c.GetThread(ctx, tid)
-	if err != nil {
-		return 0, 0, fmt.Errorf("GetThread: %w", err)
-	}
-	if _, err := c.ThreadLabels(ctx, []int64{tid}); err != nil {
-		return 0, 0, fmt.Errorf("ThreadLabels: %w", err)
-	}
-	thread = time.Since(t0)
-	if len(th.Messages) == 0 {
-		return 0, 0, fmt.Errorf("thread %d has no messages", tid)
-	}
-	last := th.Messages[len(th.Messages)-1].ID
-	var unread []int64
-	for _, m := range th.Messages {
-		if !slices.Contains(m.Flags, `\Seen`) {
-			unread = append(unread, m.ID)
-		}
-	}
-
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	var failed []string
-	var deadline time.Duration
-	call := func(name string, f func() error) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := f(); err != nil {
-				mu.Lock()
-				failed = append(failed, name)
-				mu.Unlock()
-			}
-		}()
-	}
-	call("PluginCards", func() error { _, err := c.PluginCards(ctx, last); return err })
-	call("PluginTags", func() error { _, err := c.PluginTags(ctx, last); return err })
-	body := make(chan error, 1)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		_, err := c.GetMessageLazyImages(ctx, last, false)
-		if err == nil {
-			_, err = c.ImagesAllowed(ctx, last)
-		}
-		body <- err
-		if err != nil {
-			return
-		}
-		call("avatar", func() error {
-			trusted, err := c.ImagesAllowed(ctx, last)
-			if err != nil {
-				return err
-			}
-			if !trusted {
-				books, err := c.ListAddressBooks(ctx)
-				if err != nil {
-					return err
-				}
-				if !slices.ContainsFunc(books, func(ab core.AddressBook) bool {
-					return slices.ContainsFunc(ab.Collections, func(col core.AddressBookCollection) bool { return col.Enabled && col.CardCount > 0 })
-				}) {
-					return nil
-				}
-			}
-			av, err := c.SenderAvatar(ctx, last, false)
-			if err == nil && trusted && len(av.Data) > 0 && av.Source != "carddav" {
-				_, err = c.ImagesAllowed(ctx, last)
-			}
-			return err
-		})
-		call("UnsubscribeMethod", func() error { _, err := c.UnsubscribeMethod(ctx, last); return err })
-		call("OpenPGPMessage", func() error { _, err := c.OpenPGPMessage(ctx, last); return err })
-	}()
-	if len(unread) > 0 {
-		call("SetFlags", func() error { return c.SetFlags(ctx, unread, []string{`\Seen`}, nil) })
-	}
-	call("ListSkills", func() error { _, err := c.ListSkills(ctx); return err })
-	call("ListActions", func() error { _, err := c.ListActions(ctx, "message"); return err })
-	call("ThreadDeadline", func() error {
-		t := time.Now()
-		_, err := c.ThreadDeadline(ctx, tid)
-		mu.Lock()
-		deadline = time.Since(t)
-		mu.Unlock()
-		return err
-	})
-	err = <-body
-	shown = time.Since(t0)
-	if err != nil {
-		wg.Wait()
-		return thread, shown, fmt.Errorf("body of %d: %w", last, err)
-	}
-	go func() {
-		wg.Wait()
-		done(mailOpen{all: time.Since(t0), deadline: deadline, failed: failed})
-	}()
-	return thread, shown, nil
-}
