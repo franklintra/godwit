@@ -1,0 +1,41 @@
+---
+status: proposed
+---
+
+# Lanes by caller, one writer
+
+`store.Open` opened one SQLite connection, and every caller shared it: the interface, the sync workers, the security scanner, the labeler, rules, `godwit mcp`. mygo's `sqlite.DB` runs one operation at a time behind a gate, so every statement waited for every statement queued before it. On Franklin's 3.9 GB database during a sync, the connection was busy 98 % of the time: opening a mail waited 0.7 s at the median and up to 4.5 s, mostly behind badge recounts, saved views, the starred list scan and the sync's own listings. The database runs in WAL mode, where read-only connections beside the writer read every committed state without waiting for it.
+
+An earlier attempt (branches `perf/store-readers`, `perf/store-readers2`) gave the interface two readers. It was rejected for three reasons. Its readers ran statements of seconds back to back, so a reader always held an old snapshot, no checkpoint could finish, and the WAL grew to 1.2 GB in 27 s. It classed statements by their run time, so `ThreadDeadline`, once slow, queued behind scans and went from 0.6 s to 9 s at p95. Its readers used default caches, which added 13 to 26 MB of RSS.
+
+## Decision
+
+- **Four connections, all owned by `store.DB`.** W is the read-write connection `Open` always had: it migrates and runs every `Execute`, `Transaction`, `Durable*`, PRAGMA, `WITH`, `RETURNING` and every statement that calls `last_insert_rowid()`, `changes()` or `total_changes()`. I0 and I1 are read-only connections for the plain SELECTs of calls the user waits on. B is a read-only connection for every other plain SELECT. The readers open on the first routed read after `Open` has migrated. A misrouted write fails on a reader with `SQLITE_READONLY`, and the store then runs it on W and logs it.
+- **The lane comes from the caller, never from the statement.** A context carries a lane (`store.WithLane`): `Interactive`, `UIBackground` or `Background`. A context with no mark is `Background`: sync, rules, the labeler, the scanner, Reclaim and every goroutine the core starts. The Local API sets the lane once per call: `rpc.ServerOptions.CallContext` wraps each call's own context, and `rpcbind` marks a `ui` call `Interactive` when its method is in `interactiveMethods` (pinned in `rpcbind/testdata/interactive_methods.txt`, each name a method of the `ui` role), other `ui` calls `UIBackground`, and `full` and `mcp` calls `Background`. A request may carry a lane hint (`rpc.WithLaneHint`, the `lane` member of the request); the server uses it only to lower the lane. A Wit run started from the window (`runCaller`) is `Background`. The mark holds the call context's `Done` channel, so work detached with `context.WithoutCancel` keeps the lane while the call runs and is `Background` after.
+- **Our own admission in front of mygo's gate.** Each connection takes one caller at a time, so mygo never queues. An interactive statement takes a free I connection, else B if B is free, else waits first in line for any of them (FIFO among interactive statements). Other reads wait for B. B and W serve their waiters by lane, `Interactive` before `UIBackground` before `Background`, FIFO within a lane. A waiter whose context ends leaves the queue; mygo interrupts a running statement.
+- **Background yields to the user, with a bound.** Before a `Background` statement starts on B or W, it waits while an interactive call is in flight, at most 50 ms. With no click in flight it does not wait at all, so it cannot starve the sync.
+- **A checkpoint coordinator keeps the WAL small.** W keeps `wal_autocheckpoint = 1000` and gets `journal_size_limit = 64 MiB`. After commits, at most once a second, it runs `wal_checkpoint(PASSIVE)` on W. When that cannot copy every frame and the WAL holds more than 16 MB, the coordinator takes B at the front of its queue (waiting for the one statement there), retries PASSIVE a few times while the interactive readers' short statements end, and gives B back. Above 256 MB it also holds W and runs `RESTART` for up to 2 s; this is a safety net and logs a warning with each connection's counters. After 30 s with no statement, and at `Close`, `TRUNCATE` empties the file. `Close` stops the coordinator, closes the readers, checkpoints, then closes W.
+- **Small reader caches, no mmap.** Readers run `cache_size = -1024` and `mmap_size = 0`. SQLite drops a reader's page cache whenever another connection has committed, which the sync does every few milliseconds, so a larger cache buys nothing and costs RSS.
+- **Busy waits are ours.** Every connection opens with no SQLite busy wait; the store retries `SQLITE_BUSY` with SQLite's own pauses for at most 5 s (2 s on I), stops early when the context ends, counts each wait per connection (`DB.Stats`) and writes it to the SQL trace as `busy@<conn>`. A statement that met `SQLITE_BUSY` changed nothing (a transaction rolls back), so running it again is safe. A reader still busy after its timeout runs the statement once on W.
+- **Fallbacks.** If a reader cannot open, or the database is not in WAL mode, every read stays on W. A `PRAGMA journal_mode = …` after `Open` closes the readers first and keeps every later read on W, which is what the dev copy (`core/devsync.go`) needs.
+- **Slow interactive statements are logged.** An interactive statement that runs 250 ms or longer is logged once per statement text (never its arguments), with the method that ran it. That list is the work queue for indexes and query changes; the design does not move such a statement to B, since the user waits for it either way.
+- **The SQL trace names the connection and the lane.** `GODWIT_SQL_TRACE` lines keep their five fields; the kind is `<call>@<conn>:<lane>`, for example `q@I0:i` or `t3@W:b`. perfbench computes queue wait and run time per connection, per-connection busy shares, the WAL size per part (`wal_max_mb`, `wal_end_mb`), and whether an interactive statement queued behind a background one.
+- **`store.Chunks`** runs a keyset scan as one short statement per chunk, so a long background scan holds no snapshot for long. Callers move to it one by one, each with an equivalence test.
+
+## Read-your-writes
+
+mygo has no interactive transaction: `Transaction` is one batch under `BEGIN IMMEDIATE`, and `Query` refuses `BEGIN`. So every write has committed when its call returns, and any statement that starts after it, on any connection, reads the latest WAL index and sees it. A click's write followed by a read (`SetFlags`, then `GetThread`) reads after the commit. Events are published after the commit, so the refreshes they cause see the new state. Two reads of one call can see different commits; that was already possible, since other callers' statements ran between them on the one connection.
+
+## Considered options
+
+- **Lanes by run time** (perf/store-readers2): rejected. It moved a statement the user waits for into a slow lane once it had been slow, and it needed marks spread through the core.
+- **One reader for the interface only, background reads on the writer**: the sync's long listings still blocked the interface's writes, and badges still waited behind the sync.
+- **A reader per call, or a pool of many readers**: each reader adds its page cache and schema copy to RSS, and more snapshots make checkpoints harder. Three readers with a small cache were enough in the simulation of the real trace (concurrency.md, section 3.3).
+- **A change to mygo** (statement cache, cursors, priority in its gate): not needed; several `sqlite.Open` calls and our own admission do it, and the fork stays mergeable.
+
+## Consequences
+
+- No schema change and no new `core.Service` method. One new optional member in Local API requests (`lane`), ignored by servers that do not know it.
+- Up to three more SQLite connections per backend: measured RSS budget about +3 to +4 MB.
+- Lanes remove the waiting, not the work: a statement that is slow alone (a cold row with an inline body, the starred list scan) is still slow on its reader. The body move and the indexes of the later waves address that work.
+- Merge hotspots: `core/store/store.go`, `rpc/jsonrpc.go`, `rpc/server.go`, `rpcbind/bind.go`, `rpcbind/testdata/*`.
