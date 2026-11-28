@@ -8,6 +8,7 @@ import (
 	"net/mail"
 	"slices"
 	"strings"
+	"sync"
 
 	gomail "github.com/godwit-email/godwit/core/mail"
 	"github.com/godwit-email/godwit/core/store"
@@ -213,7 +214,7 @@ func (s *Service) ContactAvatar(ctx context.Context, addr string) (Avatar, error
 	if len(headers) == 0 {
 		return Avatar{}, nil
 	}
-	left, err := s.roleFolderIDs(ctx, "sent", "drafts", "trash", "junk")
+	left, err := s.avatarLeftFolders(ctx)
 	if err != nil {
 		return Avatar{}, err
 	}
@@ -224,6 +225,112 @@ func (s *Service) ContactAvatar(ctx context.Context, addr string) (Avatar, error
 		return Avatar{}, err
 	}
 	return s.SenderAvatar(ctx, store.Int(rows.Values[0][0]), false)
+}
+
+// ContactAvatars is ContactAvatar for each of addrs, in their order: the
+// list's rows ask for their senders' avatars in one call. What every
+// address reads alike (the own addresses, the address books' cards and the
+// role folders) is read once for the call. An address whose avatar fails to
+// load gets an empty Avatar, as the interface shows an initial for a failed
+// ContactAvatar; only the call's end fails it whole.
+func (s *Service) ContactAvatars(ctx context.Context, addrs []string) ([]Avatar, error) {
+	ctx, end, err := s.begin(ctx, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer end()
+	m := &avatarMemo{}
+	if m.own, err = s.ownAddrSet(ctx); err != nil {
+		return nil, err
+	}
+	if m.comps, m.addrToComp, err = s.enabledCardComponents(ctx, m.own); err != nil {
+		return nil, err
+	}
+	if m.left, err = s.roleFolderIDs(ctx, avatarLeftRoles...); err != nil {
+		return nil, err
+	}
+	ctx = context.WithValue(ctx, avatarMemoKey{}, m)
+	out := make([]Avatar, len(addrs))
+	first := map[string]int{} // by AddrKey: an address asked twice is read once
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, contactAvatarsAtOnce)
+	for i, addr := range addrs {
+		k := gomail.AddrKey(addr)
+		if _, ok := first[k]; ok {
+			continue
+		}
+		first[k] = i
+		wg.Go(func() {
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			defer func() { <-sem }()
+			if av, err := s.ContactAvatar(ctx, addr); err == nil {
+				out[i] = av
+			}
+		})
+	}
+	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	for i, addr := range addrs {
+		if j := first[gomail.AddrKey(addr)]; j != i {
+			out[i] = out[j]
+		}
+	}
+	return out, nil
+}
+
+// contactAvatarsAtOnce bounds the addresses ContactAvatars resolves at
+// once: a remote avatar (BIMI, favicon, Gravatar) waits on the network, the
+// database reads queue anyway.
+const contactAvatarsAtOnce = 4
+
+// avatarLeftRoles are the folders whose mail ContactAvatar does not take a
+// sender's avatar from.
+var avatarLeftRoles = []string{"sent", "drafts", "trash", "junk"}
+
+// avatarMemo is what ContactAvatars reads once for all its addresses, put
+// in the context of each ContactAvatar it makes.
+type avatarMemo struct {
+	own        map[string]bool // ownAddrSet
+	comps      []cardComponent // enabledCardComponents(own)
+	addrToComp map[string]int
+	left       []any // roleFolderIDs(avatarLeftRoles...)
+}
+
+type avatarMemoKey struct{}
+
+func avatarMemoOf(ctx context.Context) *avatarMemo {
+	m, _ := ctx.Value(avatarMemoKey{}).(*avatarMemo)
+	return m
+}
+
+// avatarOwnAddrs is ownAddrSet, or the call's memo of it.
+func (s *Service) avatarOwnAddrs(ctx context.Context) (map[string]bool, error) {
+	if m := avatarMemoOf(ctx); m != nil {
+		return m.own, nil
+	}
+	return s.ownAddrSet(ctx)
+}
+
+// avatarCardComponents is enabledCardComponents(own), or the call's memo of it.
+func (s *Service) avatarCardComponents(ctx context.Context, own map[string]bool) ([]cardComponent, map[string]int, error) {
+	if m := avatarMemoOf(ctx); m != nil {
+		return m.comps, m.addrToComp, nil
+	}
+	return s.enabledCardComponents(ctx, own)
+}
+
+// avatarLeftFolders is roleFolderIDs(avatarLeftRoles...), or the call's memo of it.
+func (s *Service) avatarLeftFolders(ctx context.Context) ([]any, error) {
+	if m := avatarMemoOf(ctx); m != nil {
+		return m.left, nil
+	}
+	return s.roleFolderIDs(ctx, avatarLeftRoles...)
 }
 
 // newestFromSQL finds the newest received mail from the From headers in
@@ -262,7 +369,7 @@ func scanCardDAVPhoto(r []any) Avatar {
 // returns the highest-priority cached PHOTO along with all non-own AddrKeys in
 // that component.
 func (s *Service) carddavAvatar(ctx context.Context, email string, allowOwn bool) (av Avatar, compAddrs []string, isOwn bool, err error) {
-	own, err := s.ownAddrSet(ctx)
+	own, err := s.avatarOwnAddrs(ctx)
 	if err != nil {
 		return Avatar{}, nil, false, err
 	}
@@ -284,7 +391,7 @@ func (s *Service) carddavAvatar(ctx context.Context, email string, allowOwn bool
 		return scanCardDAVPhoto(rows.Values[0]), nil, true, nil
 	}
 
-	comps, addrToComp, err := s.enabledCardComponents(ctx, own)
+	comps, addrToComp, err := s.avatarCardComponents(ctx, own)
 	if err != nil {
 		return Avatar{}, nil, false, err
 	}

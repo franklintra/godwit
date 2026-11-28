@@ -893,3 +893,78 @@ func TestContactAvatarZeroMailConnectedComponentAndFallback(t *testing.T) {
 	assert.Equal(t, "favicon", got.Source)
 	assert.Equal(t, good, got.Data)
 }
+
+// ContactAvatars equals one ContactAvatar per address, in order, under each
+// image policy and with the remote avatar sources on and off; an address
+// asked twice gets the same answer twice.
+func TestContactAvatarsEqualsContactAvatar(t *testing.T) {
+	good := avatarPNG(t)
+	f := newAvatarFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Host == "acme.example.com" || r.Host == "gravatar.com" {
+			w.Write(good)
+		} else {
+			http.NotFound(w, r)
+		}
+	})
+	_, err := f.s.db.Execute(t.Context(), `INSERT INTO folders(id, account_id, name, role) VALUES
+		(2, 1, 'Sent', 'sent'),
+		(3, 1, 'Spam', 'junk'),
+		(4, 1, 'Trash', 'trash')`)
+	require.NoError(t, err)
+	dav := newCardDAVServerForAvatarTest(t)
+	dav.PutCollection("contacts", "Contacts")
+	dav.PutCard("contacts", "zoe", vcardWithPhoto("Zoe", []string{"zoe@work.example", "zoe@personal.example"}, encodeB64(makePNGBytes(t, 26, 26)), ""))
+	dav.PutCard("contacts", "dan", vcardWithPhoto("Dan", []string{"dan@nomail.example", "dan@acme.example.com"}, "", ""))
+	dav.PutCard("contacts", "me", vcardWithPhoto("Me", []string{"me@example.com"}, encodeB64(makePNGBytes(t, 16, 16)), ""))
+	_, err = f.s.AddAddressBook(t.Context(), AddressBookInput{Preset: PresetCustom, URL: dav.URL(), Username: "alice", Password: "secret"})
+	require.NoError(t, err)
+	addMessage(t, f.s, "hello", "Dan <dan@acme.example.com>", "hi", "", 20)
+	addMessage(t, f.s, "hi", "Bob <bob@example.com>", "hi", "", 30)
+	addMessage(t, f.s, "yo", "Eve <eve@gmail.com>", "hi", "", 40)
+	res, err := f.s.db.Execute(t.Context(), `INSERT INTO messages(account_id, subject, from_addr, date, body_text, body_html, snippet, has_attachments)
+		VALUES (1, 'spam', 'Mal <mal@acme.example.com>', 50, 'hi', '', 'snip', 0)`)
+	require.NoError(t, err)
+	showIn(t, f.s, res.LastInsertID, 3) // junk only
+
+	addrs := []string{"Zoe <zoe@personal.example>", "me@example.com", "dan@nomail.example", "bob@example.com",
+		"Eve <eve@gmail.com>", "mal@acme.example.com", "nobody@nowhere.example", "not an address", "", "BOB@example.com"}
+	for _, tc := range []struct {
+		name    string
+		policy  string
+		trusted bool
+		remote  bool
+	}{
+		{"auto", "auto", false, true},
+		{"ask", "ask", false, true},
+		{"trusted", "trusted", true, true},
+		{"remote avatars off", "auto", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f.policy(t, tc.policy, tc.trusted, false)
+			st, err := f.s.GetSettings(t.Context())
+			require.NoError(t, err)
+			st.Gravatar, st.Favicons, st.BIMI = tc.remote, tc.remote, tc.remote
+			_, err = f.s.SetSettings(t.Context(), st)
+			require.NoError(t, err)
+			var want []Avatar
+			for _, a := range addrs {
+				av, err := f.s.ContactAvatar(t.Context(), a)
+				require.NoError(t, err)
+				want = append(want, av)
+			}
+			before := len(f.hits())
+			got, err := f.s.ContactAvatars(t.Context(), addrs)
+			require.NoError(t, err)
+			require.Equal(t, want, got)
+			if !tc.remote {
+				require.Len(t, f.hits(), before, "remote avatars off, yet a request went out")
+			}
+		})
+	}
+	_, err = f.s.ContactAvatars(t.Context(), nil)
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = f.s.ContactAvatars(ctx, addrs)
+	require.Error(t, err)
+}
